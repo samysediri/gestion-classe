@@ -8,25 +8,17 @@ export default function Ecran(){
   const [eleves,setEleves] = useState<any[]>([])
 
   async function chargerEleves(){
-
     const {data} = await supabase
       .from("eleves")
       .select("*")
 
     setEleves(data || [])
-
   }
 
   useEffect(()=>{
-
     chargerEleves()
-
-    const interval = setInterval(()=>{
-      chargerEleves()
-    },1000)
-
+    const interval = setInterval(chargerEleves,1000)
     return ()=> clearInterval(interval)
-
   },[])
 
   const manquement = eleves.filter(e => e.niveau >= 1)
@@ -35,56 +27,47 @@ export default function Ecran(){
 
   return(
 
-    <div className="p-10">
+    <div className="w-screen h-screen flex flex-col">
 
-      <h1 className="text-4xl font-bold mb-10 text-center">
+      {/* titre */}
+      <div className="text-center text-4xl font-bold py-6">
         Gestion de classe
-      </h1>
+      </div>
 
-      <div className="grid grid-cols-3 gap-10 text-center">
+      {/* colonnes */}
+      <div className="flex flex-1 text-center">
 
-        <div className="bg-yellow-200 p-6 rounded-xl">
-
-          <h2 className="text-2xl font-bold mb-4">
-            Manquement
-          </h2>
+        {/* MANQUEMENT */}
+        <div className="flex-1 bg-yellow-300 p-6">
+          <h2 className="text-3xl font-bold mb-6">Manquement</h2>
 
           {manquement.map(e=>(
-            <div key={e.id} className="text-xl">
+            <div key={e.id} className="text-3xl mb-2">
               {e.nom} #{e.regle_manquement}
             </div>
           ))}
-
         </div>
 
-
-        <div className="bg-orange-200 p-6 rounded-xl">
-
-          <h2 className="text-2xl font-bold mb-4">
-            Retenue
-          </h2>
+        {/* RETENUE */}
+        <div className="flex-1 bg-orange-300 p-6">
+          <h2 className="text-3xl font-bold mb-6">Retenue</h2>
 
           {retenue.map(e=>(
-            <div key={e.id} className="text-xl">
+            <div key={e.id} className="text-3xl mb-2">
               {e.nom} #{e.regle_retenue}
             </div>
           ))}
-
         </div>
 
-
-        <div className="bg-red-200 p-6 rounded-xl">
-
-          <h2 className="text-2xl font-bold mb-4">
-            Retrait
-          </h2>
+        {/* RETRAIT */}
+        <div className="flex-1 bg-red-300 p-6">
+          <h2 className="text-3xl font-bold mb-6">Retrait</h2>
 
           {retrait.map(e=>(
-            <div key={e.id} className="text-xl">
+            <div key={e.id} className="text-3xl mb-2">
               {e.nom} #{e.regle_retrait}
             </div>
           ))}
-
         </div>
 
       </div>
@@ -92,5 +75,4 @@ export default function Ecran(){
     </div>
 
   )
-
 }
