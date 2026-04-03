@@ -16,7 +16,7 @@ export default function Page() {
   const params = useParams()
   const groupeId = Number(params.id)
 
-  // 🔥 charger élèves du groupe
+  // 🔥 charger élèves
   async function chargerEleves(){
     const {data} = await supabase
       .from("eleves")
@@ -27,7 +27,7 @@ export default function Page() {
     setEleves(data || [])
   }
 
-  // 🔥 entrer dans un groupe (avec blocage)
+  // 🔥 entrer groupe (blocage)
   async function entrerGroupe(){
 
     const { data } = await supabase
@@ -36,13 +36,11 @@ export default function Page() {
       .eq("id",1)
       .single()
 
-    // ❌ autre groupe actif
     if(data.en_cours && data.groupe_actif !== groupeId){
       alert("Un autre groupe est déjà en cours")
       return false
     }
 
-    // ✅ activer ce groupe
     await supabase
       .from("config")
       .update({
@@ -54,7 +52,7 @@ export default function Page() {
     return true
   }
 
-  // 🔥 appliquer règle à un élève
+  // 🔥 appliquer règle
   async function appliquerRegle(e:any,regle:number){
 
     let nouveau = e.niveau + 1
@@ -78,7 +76,7 @@ export default function Page() {
       .eq("id",e.id)
   }
 
-  // 🔥 multi sélection
+  // 🔥 multi
   async function appliquerMulti(regle:number){
 
     const selectionnes = eleves.filter(e =>
@@ -94,10 +92,9 @@ export default function Page() {
     setMultiMode(false)
   }
 
-  // 🔥 QUITTER (libère le système)
+  // 🔥 quitter
   async function quitterGroupe(){
 
-    // reset visuel
     setEleves(prev =>
       prev.map(e => ({
         ...e,
@@ -108,7 +105,6 @@ export default function Page() {
       }))
     )
 
-    // reset DB
     await supabase
       .from("eleves")
       .update({
@@ -119,7 +115,6 @@ export default function Page() {
       })
       .eq("groupe_id",groupeId)
 
-    // 🔥 libérer groupe actif
     await supabase
       .from("config")
       .update({
@@ -136,7 +131,6 @@ export default function Page() {
     return "bg-red-500"
   }
 
-  // 🔥 INIT (entrée dans groupe)
   useEffect(()=>{
 
     async function init(){
@@ -213,7 +207,8 @@ export default function Page() {
         </select>
       )}
 
-      <div className="grid grid-cols-3 gap-6">
+      {/* 🔥 PLAN DE CLASSE */}
+      <div className="relative w-full h-[600px] bg-gray-100 border rounded-xl">
 
         {eleves.map(e =>{
 
@@ -221,7 +216,14 @@ export default function Page() {
 
           return(
 
-            <div key={e.id}>
+            <div
+              key={e.id}
+              style={{
+                position: "absolute",
+                left: `${(e.position_x || 0) * 120}px`,
+                top: `${(e.position_y || 0) * 100}px`
+              }}
+            >
 
               <button
                 onClick={()=>{
@@ -241,7 +243,7 @@ export default function Page() {
                 }}
                 className={`
                   ${couleur(e.niveau)}
-                  text-white p-6 rounded-xl text-xl w-full
+                  text-white px-6 py-4 rounded-xl text-lg
                   ${isSelected ? "ring-4 ring-black" : ""}
                 `}
               >
@@ -252,7 +254,7 @@ export default function Page() {
 
                 <select
                   autoFocus
-                  className="mt-2 p-2 w-full border text-lg"
+                  className="mt-2 p-2 border w-full"
                   onChange={(event)=>{
 
                     const regle = Number(event.target.value)
@@ -264,10 +266,7 @@ export default function Page() {
                   }}
                 >
 
-                  <option value="0">
-                    Choisir une règle
-                  </option>
-
+                  <option value="0">Choisir une règle</option>
                   <option value="1">règle 1</option>
                   <option value="2">règle 2</option>
                   <option value="3">règle 3</option>
