@@ -22,7 +22,7 @@ export default function Page() {
   const params = useParams()
   const groupeId = Number(params.id)
 
-  // 🔥 entrer groupe (blocage)
+  // 🔥 ENTRER GROUPE (blocage)
   async function entrerGroupe(){
 
     const { data } = await supabase
@@ -31,7 +31,7 @@ export default function Page() {
       .eq("id",1)
       .single()
 
-    if(data.en_cours && data.groupe_actif !== groupeId){
+    if(data?.en_cours && data.groupe_actif !== groupeId){
       alert("Un autre groupe est déjà en cours")
       return false
     }
@@ -100,9 +100,22 @@ export default function Page() {
     setMultiMode(false)
   }
 
+  // 🔥 FIX QUITTER (IMPORTANT)
   async function quitterGroupe(){
 
-    await supabase
+    // reset local
+    setEleves(prev =>
+      prev.map(e => ({
+        ...e,
+        niveau:0,
+        regle_manquement:0,
+        regle_retenue:0,
+        regle_retrait:0
+      }))
+    )
+
+    // reset DB élèves
+    const { error:err1 } = await supabase
       .from("eleves")
       .update({
         niveau:0,
@@ -112,13 +125,18 @@ export default function Page() {
       })
       .eq("groupe_id",groupeId)
 
-    await supabase
+    if(err1) console.log("Erreur reset élèves:", err1)
+
+    // libérer config
+    const { error:err2 } = await supabase
       .from("config")
       .update({
         groupe_actif:null,
         en_cours:false
       })
       .eq("id",1)
+
+    if(err2) console.log("Erreur config:", err2)
 
     setSelection(null)
   }
@@ -153,7 +171,6 @@ export default function Page() {
   function startDrag(e:any,clientX:number,clientY:number){
 
     const rect = document.getElementById("btn-"+e.id)?.getBoundingClientRect()
-
     if(!rect) return
 
     dragOffset.current = {
@@ -189,7 +206,11 @@ export default function Page() {
       const el = eleves.find(e=> e.id === dragging.id)
 
       if(el){
-        updatePosition(el.id, el.tempX ?? el.position_x ?? 0, el.tempY ?? el.position_y ?? 0)
+        updatePosition(
+          el.id,
+          el.tempX ?? el.position_x ?? 0,
+          el.tempY ?? el.position_y ?? 0
+        )
       }
 
       setDragging(null)
@@ -204,10 +225,13 @@ export default function Page() {
         Groupe {groupeId}
       </h1>
 
+      {/* 🔥 BOUTONS */}
       <div className="flex gap-3 mb-4">
 
-        <button onClick={quitterGroupe}
-          className="bg-red-700 text-white px-4 py-2 rounded-xl">
+        <button
+          onClick={quitterGroupe}
+          className="bg-red-700 text-white px-4 py-2 rounded-xl"
+        >
           QUITTER
         </button>
 
@@ -259,6 +283,7 @@ export default function Page() {
         </div>
       )}
 
+      {/* 🔥 PLAN */}
       <div
         className="relative w-full h-[600px] bg-gray-100 border rounded-xl"
         style={{ touchAction:"none" }}
