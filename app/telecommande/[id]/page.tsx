@@ -16,15 +16,15 @@ export default function Page() {
   const [multiSelection,setMultiSelection] = useState<number[]>([])
   const [showMultiSelect,setShowMultiSelect] = useState(false)
 
+  const [retraitDirect,setRetraitDirect] = useState(false)
+
   const dragOffset = useRef({x:0,y:0})
   const longPressTimer = useRef<any>(null)
 
   const params = useParams()
   const groupeId = Number(params.id)
 
-  // 🔥 ENTRER GROUPE (blocage)
   async function entrerGroupe(){
-
     const { data } = await supabase
       .from("config")
       .select("*")
@@ -85,8 +85,29 @@ export default function Page() {
     setSelection(null)
   }
 
-  async function appliquerMulti(regle:number){
+  // 🔴 RETRAIT DIRECT
+  async function appliquerRetraitDirect(e:any,regle:number){
 
+    const update = {
+      niveau:3,
+      regle_manquement:0,
+      regle_retenue:0,
+      regle_retrait:regle
+    }
+
+    setEleves(prev =>
+      prev.map(el =>
+        el.id === e.id ? {...el,...update} : el
+      )
+    )
+
+    await supabase.from("eleves").update(update).eq("id",e.id)
+
+    setSelection(null)
+    setRetraitDirect(false)
+  }
+
+  async function appliquerMulti(regle:number){
     const selectionnes = eleves.filter(e =>
       multiSelection.includes(e.id)
     )
@@ -100,22 +121,9 @@ export default function Page() {
     setMultiMode(false)
   }
 
-  // 🔥 FIX QUITTER (IMPORTANT)
   async function quitterGroupe(){
 
-    // reset local
-    setEleves(prev =>
-      prev.map(e => ({
-        ...e,
-        niveau:0,
-        regle_manquement:0,
-        regle_retenue:0,
-        regle_retrait:0
-      }))
-    )
-
-    // reset DB élèves
-    const { error:err1 } = await supabase
+    await supabase
       .from("eleves")
       .update({
         niveau:0,
@@ -125,18 +133,13 @@ export default function Page() {
       })
       .eq("groupe_id",groupeId)
 
-    if(err1) console.log("Erreur reset élèves:", err1)
-
-    // libérer config
-    const { error:err2 } = await supabase
+    await supabase
       .from("config")
       .update({
         groupe_actif:null,
         en_cours:false
       })
       .eq("id",1)
-
-    if(err2) console.log("Erreur config:", err2)
 
     setSelection(null)
   }
@@ -221,26 +224,30 @@ export default function Page() {
 
     <div className="p-6 h-screen overflow-hidden select-none">
 
+      <style>{`
+        @keyframes wiggle {
+          0% { transform: rotate(-1deg); }
+          50% { transform: rotate(1deg); }
+          100% { transform: rotate(-1deg); }
+        }
+        .wiggle {
+          animation: wiggle 0.2s infinite;
+        }
+      `}</style>
+
       <h1 className="text-3xl mb-4">
         Groupe {groupeId}
       </h1>
 
-      {/* 🔥 BOUTONS */}
       <div className="flex gap-3 mb-4">
 
-        <button
-          onClick={quitterGroupe}
-          className="bg-red-700 text-white px-4 py-2 rounded-xl"
-        >
+        <button onClick={quitterGroupe}
+          className="bg-red-700 text-white px-4 py-2 rounded-xl">
           QUITTER
         </button>
 
         <button
-          onClick={()=>{
-            setMultiMode(!multiMode)
-            setMultiSelection([])
-            setShowMultiSelect(false)
-          }}
+          onClick={()=> setMultiMode(!multiMode)}
           className={`px-4 py-2 rounded-xl ${
             multiMode ? "bg-purple-700 text-white" : "bg-gray-300"
           }`}
@@ -248,52 +255,20 @@ export default function Page() {
           Multi
         </button>
 
-        {multiMode && (
-          <button
-            onClick={()=>{
-              setMultiMode(false)
-              setMultiSelection([])
-            }}
-            className="bg-gray-500 text-white px-4 py-2 rounded-xl"
-          >
-            Annuler
-          </button>
-        )}
-
-        {multiMode && multiSelection.length > 0 && (
-          <button
-            onClick={()=> setShowMultiSelect(true)}
-            className="bg-green-600 text-white px-4 py-2 rounded-xl"
-          >
-            OK ({multiSelection.length})
-          </button>
-        )}
+        <button
+          onClick={()=> setRetraitDirect(!retraitDirect)}
+          className={`px-4 py-2 rounded-xl ${
+            retraitDirect ? "bg-red-800 text-white" : "bg-gray-300"
+          }`}
+        >
+          Retrait direct
+        </button>
 
       </div>
 
-      {showMultiSelect && (
-        <div className="flex gap-2 mb-4">
-          {[1,2,3,4].map(r => (
-            <button key={r}
-              className="bg-black text-white px-4 py-2 rounded-xl"
-              onClick={()=> appliquerMulti(r)}>
-              #{r}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* 🔥 PLAN */}
       <div
         className="relative w-full h-[600px] bg-gray-100 border rounded-xl"
         style={{ touchAction:"none" }}
-
-        onClick={(e)=>{
-          if(e.target === e.currentTarget){
-            setEditMode(false)
-            setSelection(null)
-          }
-        }}
 
         onMouseMove={(e)=> handleMove(e.clientX,e.clientY,e.currentTarget)}
         onMouseUp={handleEnd}
@@ -314,11 +289,7 @@ export default function Page() {
 
             <div
               key={e.id}
-              style={{
-                position:"absolute",
-                left:x,
-                top:y
-              }}
+              style={{ position:"absolute", left:x, top:y }}
 
               onMouseDown={(ev)=> {
                 if(editMode){
@@ -330,7 +301,6 @@ export default function Page() {
 
               onTouchStart={(ev)=>{
                 const touch = ev.touches[0]
-
                 if(editMode){
                   startDrag(e,touch.clientX,touch.clientY)
                 }else{
@@ -344,33 +314,47 @@ export default function Page() {
 
               <button
                 id={"btn-"+e.id}
-                className={`${couleur(e.niveau)} text-white px-6 py-4 rounded-xl`}
+                className={`${couleur(e.niveau)} text-white px-6 py-4 rounded-xl ${editMode ? "wiggle" : ""}`}
                 onClick={()=>{
-                  if(!editMode){
 
-                    if(multiMode){
-                      setMultiSelection(prev =>
-                        prev.includes(e.id)
-                          ? prev.filter(id => id !== e.id)
-                          : [...prev,e.id]
-                      )
-                    }else{
-                      setSelection(e.id)
-                    }
+                  if(editMode) return
 
+                  if(retraitDirect){
+                    setSelection(e.id)
+                    return
                   }
+
+                  if(multiMode){
+                    setMultiSelection(prev =>
+                      prev.includes(e.id)
+                        ? prev.filter(id => id !== e.id)
+                        : [...prev,e.id]
+                    )
+                  }else{
+                    setSelection(e.id)
+                  }
+
                 }}
               >
                 {e.nom}
               </button>
 
-              {!editMode && !multiMode && selection === e.id && (
+              {/* règles */}
+              {selection === e.id && !editMode && (
 
                 <div className="flex gap-2 mt-2">
                   {[1,2,3,4].map(r => (
-                    <button key={r}
+                    <button
+                      key={r}
                       className="bg-black text-white px-3 py-1 rounded-lg"
-                      onClick={()=> appliquerRegle(e,r)}>
+                      onClick={()=>{
+                        if(retraitDirect){
+                          appliquerRetraitDirect(e,r)
+                        }else{
+                          appliquerRegle(e,r)
+                        }
+                      }}
+                    >
                       #{r}
                     </button>
                   ))}
