@@ -30,12 +30,14 @@ export default function Page() {
     setEleves(data || [])
   }
 
+  // 🔥 position EXACTE (plus de snap)
   async function updatePosition(id:number,x:number,y:number){
+
     await supabase
       .from("eleves")
       .update({
-        position_x: Math.round(x/120),
-        position_y: Math.round(y/100)
+        position_x: x,
+        position_y: y
       })
       .eq("id",id)
   }
@@ -204,9 +206,11 @@ export default function Page() {
 
       </div>
 
+      {/* 🔥 SELECT MULTI DIRECT */}
       {showMultiSelect && (
         <select
-          className="mb-4 p-2 border w-full"
+          autoFocus
+          className="mb-4 p-3 border w-full text-lg"
           onChange={(e)=>{
             const regle = Number(e.target.value)
             if(regle > 0){
@@ -248,8 +252,8 @@ export default function Page() {
           const isDragging = dragging?.id === e.id
           const isSelected = multiSelection.includes(e.id)
 
-          const x = e.tempX ?? (e.position_x || 0) * 120
-          const y = e.tempY ?? (e.position_y || 0) * 100
+          const x = e.tempX ?? e.position_x ?? 0
+          const y = e.tempY ?? e.position_y ?? 0
 
           return(
 
@@ -313,16 +317,19 @@ export default function Page() {
                 {e.nom}
               </button>
 
-              {!multiMode && selection === e.id && !editMode && (
+              {/* 🔥 POP DIRECT */}
+              {!editMode && !multiMode && selection === e.id && (
 
                 <select
-                  className="mt-2 p-2 border"
+                  autoFocus
+                  className="mt-2 p-2 border text-lg"
                   onChange={(event)=>{
 
                     const regle = Number(event.target.value)
 
                     if(regle > 0){
                       appliquerRegle(e,regle)
+                      setSelection(null)
                     }
 
                   }}
