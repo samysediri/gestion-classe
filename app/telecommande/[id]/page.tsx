@@ -8,6 +8,8 @@ export default function Page() {
 
   const [eleves,setEleves] = useState<any[]>([])
   const [selection,setSelection] = useState<number|null>(null)
+
+  const [editMode,setEditMode] = useState(false)
   const [dragging,setDragging] = useState<any|null>(null)
 
   const longPressTimer = useRef<any>(null)
@@ -22,29 +24,6 @@ export default function Page() {
       .eq("groupe_id",groupeId)
 
     setEleves(data || [])
-  }
-
-  async function appliquerRegle(e:any,regle:number){
-
-    let nouveau = e.niveau + 1
-    if(nouveau > 3) nouveau = 3
-
-    let update:any = { niveau:nouveau }
-
-    if(nouveau === 1) update.regle_manquement = regle
-    if(nouveau === 2) update.regle_retenue = regle
-    if(nouveau === 3) update.regle_retrait = regle
-
-    setEleves(prev =>
-      prev.map(el =>
-        el.id === e.id ? {...el,...update} : el
-      )
-    )
-
-    await supabase
-      .from("eleves")
-      .update(update)
-      .eq("id",e.id)
   }
 
   async function updatePosition(id:number,x:number,y:number){
@@ -69,6 +48,17 @@ export default function Page() {
     return "bg-red-500"
   }
 
+  // 🔥 LONG PRESS → active mode édition
+  function startLongPress(e:any){
+    longPressTimer.current = setTimeout(()=>{
+      setEditMode(true)
+    },600)
+  }
+
+  function cancelLongPress(){
+    clearTimeout(longPressTimer.current)
+  }
+
   function handleMove(clientX:number,clientY:number,container:any){
 
     if(!dragging) return
@@ -89,8 +79,6 @@ export default function Page() {
 
   function handleEnd(){
 
-    clearTimeout(longPressTimer.current)
-
     if(dragging){
 
       const el = eleves.find(e=> e.id === dragging.id)
@@ -103,22 +91,17 @@ export default function Page() {
     }
   }
 
-  function startLongPress(e:any){
-
-    e.preventDefault() // 🔥 empêche menu iOS
-
-    longPressTimer.current = setTimeout(()=>{
-      setDragging(e)
-    },300)
-  }
-
-  function cancelLongPress(){
-    clearTimeout(longPressTimer.current)
-  }
-
   return(
 
-    <div className="p-10 select-none">
+    <div
+      className="p-10 select-none"
+      onClick={(e)=>{
+        // 🔥 quitter mode édition si on clique ailleurs
+        if(editMode && e.target === e.currentTarget){
+          setEditMode(false)
+        }
+      }}
+    >
 
       <h1 className="text-3xl mb-10">
         Plan de classe
@@ -151,56 +134,49 @@ export default function Page() {
               style={{
                 position:"absolute",
                 left:x,
-                top:isDragging ? y - 30 : y, // 🔥 lift visuel
+                top:isDragging ? y - 20 : y,
                 zIndex: isDragging ? 1000 : 1,
-                transform: isDragging ? "scale(1.05)" : "scale(1)",
-                transition: "transform 0.1s"
+                transform: isDragging ? "scale(1.1)" : "scale(1)"
               }}
 
-              onMouseDown={()=> startLongPress(e)}
+              onMouseDown={()=> {
+                if(editMode){
+                  setDragging(e)
+                }else{
+                  startLongPress(e)
+                }
+              }}
+
               onMouseUp={cancelLongPress}
               onMouseLeave={cancelLongPress}
 
-              onTouchStart={()=> startLongPress(e)}
+              onTouchStart={(ev)=>{
+                ev.preventDefault()
+
+                if(editMode){
+                  setDragging(e)
+                }else{
+                  startLongPress(e)
+                }
+              }}
+
               onTouchEnd={cancelLongPress}
             >
 
               <button
-                className={`${couleur(e.niveau)} text-white px-6 py-4 rounded-xl`}
+                className={`
+                  ${couleur(e.niveau)}
+                  text-white px-6 py-4 rounded-xl
+                  ${editMode ? "animate-pulse" : ""}
+                `}
                 onClick={()=> {
-                  if(!dragging){
+                  if(!editMode){
                     setSelection(e.id)
                   }
                 }}
               >
                 {e.nom}
               </button>
-
-              {selection === e.id && !dragging && (
-
-                <select
-                  autoFocus
-                  className="mt-2 p-2 border"
-                  onChange={(event)=>{
-
-                    const regle = Number(event.target.value)
-
-                    if(regle > 0){
-                      appliquerRegle(e,regle)
-                    }
-
-                  }}
-                >
-
-                  <option value="0">Choisir une règle</option>
-                  <option value="1">règle 1</option>
-                  <option value="2">règle 2</option>
-                  <option value="3">règle 3</option>
-                  <option value="4">règle 4</option>
-
-                </select>
-
-              )}
 
             </div>
 
