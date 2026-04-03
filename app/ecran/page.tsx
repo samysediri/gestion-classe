@@ -6,8 +6,9 @@ import { supabase } from "../../lib/supabase"
 export default function Ecran(){
 
   const [eleves,setEleves] = useState<any[]>([])
+  const [groupeId,setGroupeId] = useState<number|null>(null)
 
-  async function chargerEleves(){
+  async function charger(){
 
     // 🔥 récupérer groupe actif
     const {data:config} = await supabase
@@ -18,21 +19,26 @@ export default function Ecran(){
 
     if(!config) return
 
-    const groupeId = config.groupe_actif
+    // 🔥 si groupe change → update
+    if(config.groupe_actif !== groupeId){
+      setGroupeId(config.groupe_actif)
+    }
 
+    // 🔥 charger les élèves du bon groupe
     const {data} = await supabase
       .from("eleves")
       .select("*")
-      .eq("groupe_id",groupeId)
+      .eq("groupe_id",config.groupe_actif)
 
     setEleves(data || [])
   }
 
   useEffect(()=>{
-    chargerEleves()
-    const interval = setInterval(chargerEleves,1000)
+    charger()
+
+    const interval = setInterval(charger,1000)
     return ()=> clearInterval(interval)
-  },[])
+  },[groupeId])
 
   function getTextSize(count:number){
     if(count <= 3) return "text-7xl"
