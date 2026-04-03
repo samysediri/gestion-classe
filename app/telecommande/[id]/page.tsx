@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import { supabase } from "../../../lib/supabase"
 import { useParams } from "next/navigation"
 
@@ -9,6 +9,8 @@ export default function Page() {
   const [eleves,setEleves] = useState<any[]>([])
   const [selection,setSelection] = useState<number|null>(null)
   const [dragging,setDragging] = useState<any|null>(null)
+
+  const longPressTimer = useRef<any>(null)
 
   const params = useParams()
   const groupeId = Number(params.id)
@@ -87,6 +89,8 @@ export default function Page() {
 
   function handleEnd(){
 
+    clearTimeout(longPressTimer.current)
+
     if(dragging){
 
       const el = eleves.find(e=> e.id === dragging.id)
@@ -99,12 +103,25 @@ export default function Page() {
     }
   }
 
+  function startLongPress(e:any){
+
+    e.preventDefault() // 🔥 empêche menu iOS
+
+    longPressTimer.current = setTimeout(()=>{
+      setDragging(e)
+    },300)
+  }
+
+  function cancelLongPress(){
+    clearTimeout(longPressTimer.current)
+  }
+
   return(
 
-    <div className="p-10">
+    <div className="p-10 select-none">
 
       <h1 className="text-3xl mb-10">
-        Plan de classe (drag & drop)
+        Plan de classe
       </h1>
 
       <div
@@ -122,6 +139,8 @@ export default function Page() {
 
         {eleves.map(e =>{
 
+          const isDragging = dragging?.id === e.id
+
           const x = e.tempX ?? (e.position_x || 0) * 120
           const y = e.tempY ?? (e.position_y || 0) * 100
 
@@ -132,21 +151,32 @@ export default function Page() {
               style={{
                 position:"absolute",
                 left:x,
-                top:y
+                top:isDragging ? y - 30 : y, // 🔥 lift visuel
+                zIndex: isDragging ? 1000 : 1,
+                transform: isDragging ? "scale(1.05)" : "scale(1)",
+                transition: "transform 0.1s"
               }}
 
-              onMouseDown={()=> setDragging(e)}
-              onTouchStart={()=> setDragging(e)}
+              onMouseDown={()=> startLongPress(e)}
+              onMouseUp={cancelLongPress}
+              onMouseLeave={cancelLongPress}
+
+              onTouchStart={()=> startLongPress(e)}
+              onTouchEnd={cancelLongPress}
             >
 
               <button
-                onClick={()=> setSelection(e.id)}
                 className={`${couleur(e.niveau)} text-white px-6 py-4 rounded-xl`}
+                onClick={()=> {
+                  if(!dragging){
+                    setSelection(e.id)
+                  }
+                }}
               >
                 {e.nom}
               </button>
 
-              {selection === e.id && (
+              {selection === e.id && !dragging && (
 
                 <select
                   autoFocus
