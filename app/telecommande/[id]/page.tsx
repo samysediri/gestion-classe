@@ -14,7 +14,6 @@ export default function Page() {
 
   const [multiMode,setMultiMode] = useState(false)
   const [multiSelection,setMultiSelection] = useState<number[]>([])
-  const [showMultiSelect,setShowMultiSelect] = useState(false)
 
   const [retraitDirect,setRetraitDirect] = useState(false)
 
@@ -24,7 +23,7 @@ export default function Page() {
   const params = useParams()
   const groupeId = Number(params.id)
 
-  // 🔥 ENTRER GROUPE
+  // 🔥 ENTRER GROUPE AVEC CONFIRMATION
   async function entrerGroupe(){
 
     const { data } = await supabase
@@ -34,8 +33,23 @@ export default function Page() {
       .single()
 
     if(data?.en_cours && data.groupe_actif !== groupeId){
-      alert("Un autre groupe est déjà en cours")
-      return false
+
+      const confirmation = confirm(
+        "Un autre groupe est en cours. Voulez-vous le fermer pour utiliser celui-ci ?"
+      )
+
+      if(!confirmation) return false
+
+      // 🔥 ferme ancien groupe
+      await supabase
+        .from("eleves")
+        .update({
+          niveau:0,
+          regle_manquement:0,
+          regle_retenue:0,
+          regle_retrait:0
+        })
+        .eq("groupe_id",data.groupe_actif)
     }
 
     await supabase
@@ -63,6 +77,20 @@ export default function Page() {
       .from("eleves")
       .update({ position_x:x, position_y:y })
       .eq("id",id)
+  }
+
+  async function sauvegarderToutesPositions(){
+
+    for(const e of eleves){
+
+      await supabase
+        .from("eleves")
+        .update({
+          position_x: e.tempX ?? e.position_x ?? 0,
+          position_y: e.tempY ?? e.position_y ?? 0
+        })
+        .eq("id",e.id)
+    }
   }
 
   async function appliquerRegle(e:any,regle:number){
@@ -108,18 +136,13 @@ export default function Page() {
     setRetraitDirect(false)
   }
 
+  // 🔥 QUITTER FIX FINAL
   async function quitterGroupe(){
 
-    setEleves(prev =>
-      prev.map(e => ({
-        ...e,
-        niveau:0,
-        regle_manquement:0,
-        regle_retenue:0,
-        regle_retrait:0
-      }))
-    )
+    // 🔥 sauvegarde positions AVANT
+    await sauvegarderToutesPositions()
 
+    // reset comportements
     await supabase
       .from("eleves")
       .update({
@@ -138,12 +161,10 @@ export default function Page() {
       })
       .eq("id",1)
 
-    // 🔥 reset UI complet
     setSelection(null)
     setEditMode(false)
     setMultiMode(false)
     setMultiSelection([])
-    setShowMultiSelect(false)
     setRetraitDirect(false)
   }
 
@@ -227,17 +248,6 @@ export default function Page() {
 
     <div className="p-6 h-screen overflow-hidden select-none">
 
-      <style>{`
-        @keyframes wiggle {
-          0% { transform: rotate(-1deg); }
-          50% { transform: rotate(1deg); }
-          100% { transform: rotate(-1deg); }
-        }
-        .wiggle {
-          animation: wiggle 0.2s infinite;
-        }
-      `}</style>
-
       <h1 className="text-3xl mb-4">
         Groupe {groupeId}
       </h1>
@@ -273,7 +283,6 @@ export default function Page() {
         className="relative w-full h-[600px] bg-gray-100 border rounded-xl"
         style={{ touchAction:"none" }}
 
-        // 🔥 FIX FINAL
         onClick={()=>{
           setSelection(null)
           setEditMode(false)
@@ -323,7 +332,7 @@ export default function Page() {
 
               <button
                 id={"btn-"+e.id}
-                className={`${couleur(e.niveau)} text-white px-6 py-4 rounded-xl ${editMode ? "wiggle" : ""}`}
+                className={`${couleur(e.niveau)} text-white px-6 py-4 rounded-xl ${editMode ? "animate-pulse" : ""}`}
                 onClick={(ev)=>{
 
                   ev.stopPropagation()
