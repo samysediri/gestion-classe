@@ -8,7 +8,6 @@ export default function Page() {
   const [eleves,setEleves] = useState<any[]>([])
   const [selection,setSelection] = useState<number|null>(null)
 
-  // 🔥 nouveau
   const [multiMode,setMultiMode] = useState(false)
   const [multiSelection,setMultiSelection] = useState<number[]>([])
   const [showMultiSelect,setShowMultiSelect] = useState(false)
@@ -45,7 +44,6 @@ export default function Page() {
       .eq("id",e.id)
   }
 
-  // 🔥 appliquer à plusieurs
   async function appliquerMulti(regle:number){
 
     const selectionnes = eleves.filter(e =>
@@ -125,9 +123,12 @@ export default function Page() {
           Sélection multiple
         </button>
 
-        {multiMode && multiSelection.length > 0 && !showMultiSelect && (
+        {/* 🔥 OK = ouvre DIRECT le select */}
+        {multiMode && multiSelection.length > 0 && (
           <button
-            onClick={()=> setShowMultiSelect(true)}
+            onClick={()=>{
+              setShowMultiSelect(true)
+            }}
             className="bg-green-600 text-white px-6 py-3 rounded-xl"
           >
             OK ({multiSelection.length})
@@ -136,25 +137,24 @@ export default function Page() {
 
       </div>
 
-      {/* 🔥 SELECT MULTI */}
+      {/* 🔥 SELECT MULTI (direct visible) */}
       {showMultiSelect && (
-        <div className="mb-8">
-          <select
-            className="p-4 text-xl border w-full"
-            onChange={(e)=>{
-              const regle = Number(e.target.value)
-              if(regle > 0){
-                appliquerMulti(regle)
-              }
-            }}
-          >
-            <option value="0">Choisir une règle</option>
-            <option value="1">règle 1</option>
-            <option value="2">règle 2</option>
-            <option value="3">règle 3</option>
-            <option value="4">règle 4</option>
-          </select>
-        </div>
+        <select
+          autoFocus
+          className="mb-8 p-4 text-xl border w-full"
+          onChange={(e)=>{
+            const regle = Number(e.target.value)
+            if(regle > 0){
+              appliquerMulti(regle)
+            }
+          }}
+        >
+          <option value="0">Choisir une règle</option>
+          <option value="1">règle 1</option>
+          <option value="2">règle 2</option>
+          <option value="3">règle 3</option>
+          <option value="4">règle 4</option>
+        </select>
       )}
 
       <div className="grid grid-cols-3 gap-6">
@@ -170,7 +170,6 @@ export default function Page() {
               <button
                 onClick={()=>{
 
-                  // 🔥 MODE MULTI
                   if(multiMode){
 
                     setMultiSelection(prev =>
@@ -182,8 +181,9 @@ export default function Page() {
                     return
                   }
 
-                  // 🔥 MODE NORMAL
+                  // 🔥 MODE NORMAL → menu direct
                   setSelection(e.id)
+
                 }}
                 className={`
                   ${couleur(e.niveau)}
@@ -194,7 +194,7 @@ export default function Page() {
                 {e.nom}
               </button>
 
-              {/* 🔥 SELECT NORMAL (direct) */}
+              {/* 🔥 SELECT NORMAL */}
               {!multiMode && selection === e.id && (
 
                 <select
