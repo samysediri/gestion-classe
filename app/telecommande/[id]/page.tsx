@@ -22,6 +22,31 @@ export default function Page() {
   const params = useParams()
   const groupeId = Number(params.id)
 
+  // 🔥 entrer groupe (blocage)
+  async function entrerGroupe(){
+
+    const { data } = await supabase
+      .from("config")
+      .select("*")
+      .eq("id",1)
+      .single()
+
+    if(data.en_cours && data.groupe_actif !== groupeId){
+      alert("Un autre groupe est déjà en cours")
+      return false
+    }
+
+    await supabase
+      .from("config")
+      .update({
+        groupe_actif: groupeId,
+        en_cours: true
+      })
+      .eq("id",1)
+
+    return true
+  }
+
   async function chargerEleves(){
     const {data} = await supabase
       .from("eleves")
@@ -77,7 +102,8 @@ export default function Page() {
 
   async function quitterGroupe(){
 
-    await supabase.from("eleves")
+    await supabase
+      .from("eleves")
       .update({
         niveau:0,
         regle_manquement:0,
@@ -86,13 +112,25 @@ export default function Page() {
       })
       .eq("groupe_id",groupeId)
 
-    await supabase.from("config")
-      .update({ groupe_actif:null, en_cours:false })
+    await supabase
+      .from("config")
+      .update({
+        groupe_actif:null,
+        en_cours:false
+      })
       .eq("id",1)
+
+    setSelection(null)
   }
 
   useEffect(()=>{
-    chargerEleves()
+    async function init(){
+      const ok = await entrerGroupe()
+      if(ok){
+        chargerEleves()
+      }
+    }
+    init()
   },[])
 
   function couleur(niveau:number){
@@ -166,7 +204,6 @@ export default function Page() {
         Groupe {groupeId}
       </h1>
 
-      {/* boutons */}
       <div className="flex gap-3 mb-4">
 
         <button onClick={quitterGroupe}
@@ -222,7 +259,6 @@ export default function Page() {
         </div>
       )}
 
-      {/* plan */}
       <div
         className="relative w-full h-[600px] bg-gray-100 border rounded-xl"
         style={{ touchAction:"none" }}
@@ -230,7 +266,7 @@ export default function Page() {
         onClick={(e)=>{
           if(e.target === e.currentTarget){
             setEditMode(false)
-            setSelection(null) // 🔥 FIX IMPORTANT
+            setSelection(null)
           }
         }}
 
@@ -246,7 +282,6 @@ export default function Page() {
 
         {eleves.map(e =>{
 
-          const isDragging = dragging?.id === e.id
           const x = e.tempX ?? e.position_x ?? 0
           const y = e.tempY ?? e.position_y ?? 0
 
@@ -257,8 +292,7 @@ export default function Page() {
               style={{
                 position:"absolute",
                 left:x,
-                top:y,
-                zIndex: isDragging ? 1000 : 1
+                top:y
               }}
 
               onMouseDown={(ev)=> {
@@ -285,11 +319,7 @@ export default function Page() {
 
               <button
                 id={"btn-"+e.id}
-                className={`
-                  ${couleur(e.niveau)}
-                  text-white px-6 py-4 rounded-xl
-                  ${editMode ? "animate-pulse" : ""}
-                `}
+                className={`${couleur(e.niveau)} text-white px-6 py-4 rounded-xl`}
                 onClick={()=>{
                   if(!editMode){
 
@@ -313,11 +343,9 @@ export default function Page() {
 
                 <div className="flex gap-2 mt-2">
                   {[1,2,3,4].map(r => (
-                    <button
-                      key={r}
+                    <button key={r}
                       className="bg-black text-white px-3 py-1 rounded-lg"
-                      onClick={()=> appliquerRegle(e,r)}
-                    >
+                      onClick={()=> appliquerRegle(e,r)}>
                       #{r}
                     </button>
                   ))}
