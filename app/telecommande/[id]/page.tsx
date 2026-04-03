@@ -8,12 +8,10 @@ export default function Page() {
 
   const [eleves,setEleves] = useState<any[]>([])
   const [selection,setSelection] = useState<number|null>(null)
+  const [dragging,setDragging] = useState<any|null>(null)
 
   const params = useParams()
   const groupeId = Number(params.id)
-
-  // 🔥 drag state
-  const [dragging,setDragging] = useState<any|null>(null)
 
   async function chargerEleves(){
     const {data} = await supabase
@@ -47,7 +45,6 @@ export default function Page() {
       .eq("id",e.id)
   }
 
-  // 🔥 sauvegarde position
   async function updatePosition(id:number,x:number,y:number){
 
     await supabase
@@ -70,6 +67,38 @@ export default function Page() {
     return "bg-red-500"
   }
 
+  function handleMove(clientX:number,clientY:number,container:any){
+
+    if(!dragging) return
+
+    const rect = container.getBoundingClientRect()
+
+    const x = clientX - rect.left
+    const y = clientY - rect.top
+
+    setEleves(prev =>
+      prev.map(el =>
+        el.id === dragging.id
+          ? {...el, tempX:x, tempY:y}
+          : el
+      )
+    )
+  }
+
+  function handleEnd(){
+
+    if(dragging){
+
+      const el = eleves.find(e=> e.id === dragging.id)
+
+      if(el){
+        updatePosition(el.id, el.tempX || 0, el.tempY || 0)
+      }
+
+      setDragging(null)
+    }
+  }
+
   return(
 
     <div className="p-10">
@@ -80,34 +109,15 @@ export default function Page() {
 
       <div
         className="relative w-full h-[600px] bg-gray-100 border rounded-xl"
-        onMouseMove={(e)=>{
-          if(!dragging) return
 
-          const rect = e.currentTarget.getBoundingClientRect()
+        onMouseMove={(e)=> handleMove(e.clientX,e.clientY,e.currentTarget)}
+        onMouseUp={handleEnd}
 
-          const x = e.clientX - rect.left
-          const y = e.clientY - rect.top
-
-          setEleves(prev =>
-            prev.map(el =>
-              el.id === dragging.id
-                ? {...el, tempX:x, tempY:y}
-                : el
-            )
-          )
+        onTouchMove={(e)=> {
+          const touch = e.touches[0]
+          handleMove(touch.clientX,touch.clientY,e.currentTarget)
         }}
-        onMouseUp={()=>{
-          if(dragging){
-
-            const el = eleves.find(e=> e.id === dragging.id)
-
-            if(el){
-              updatePosition(el.id, el.tempX || 0, el.tempY || 0)
-            }
-
-            setDragging(null)
-          }
-        }}
+        onTouchEnd={handleEnd}
       >
 
         {eleves.map(e =>{
@@ -122,12 +132,11 @@ export default function Page() {
               style={{
                 position:"absolute",
                 left:x,
-                top:y,
-                cursor:"grab"
+                top:y
               }}
-              onMouseDown={()=>{
-                setDragging(e)
-              }}
+
+              onMouseDown={()=> setDragging(e)}
+              onTouchStart={()=> setDragging(e)}
             >
 
               <button
