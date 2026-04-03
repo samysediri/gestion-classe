@@ -16,6 +16,7 @@ export default function Page() {
   const [multiSelection,setMultiSelection] = useState<number[]>([])
   const [showMultiSelect,setShowMultiSelect] = useState(false)
 
+  const dragOffset = useRef({x:0,y:0})
   const longPressTimer = useRef<any>(null)
 
   const params = useParams()
@@ -30,14 +31,12 @@ export default function Page() {
     setEleves(data || [])
   }
 
-  // 🔥 position EXACTE (plus de snap)
   async function updatePosition(id:number,x:number,y:number){
-
     await supabase
       .from("eleves")
       .update({
-        position_x: x,
-        position_y: y
+        position_x:x,
+        position_y:y
       })
       .eq("id",id)
   }
@@ -63,6 +62,8 @@ export default function Page() {
       .from("eleves")
       .update(update)
       .eq("id",e.id)
+
+    setSelection(null)
   }
 
   async function appliquerMulti(regle:number){
@@ -105,8 +106,8 @@ export default function Page() {
     await supabase
       .from("config")
       .update({
-        groupe_actif: null,
-        en_cours: false
+        groupe_actif:null,
+        en_cours:false
       })
       .eq("id",1)
   }
@@ -132,14 +133,26 @@ export default function Page() {
     clearTimeout(longPressTimer.current)
   }
 
+  function startDrag(e:any,clientX:number,clientY:number){
+
+    const rect = e.target.getBoundingClientRect()
+
+    dragOffset.current = {
+      x: clientX - rect.left,
+      y: clientY - rect.top
+    }
+
+    setDragging(e)
+  }
+
   function handleMove(clientX:number,clientY:number,container:any){
 
     if(!dragging) return
 
     const rect = container.getBoundingClientRect()
 
-    const x = clientX - rect.left
-    const y = clientY - rect.top
+    const x = clientX - rect.left - dragOffset.current.x
+    const y = clientY - rect.top - dragOffset.current.y
 
     setEleves(prev =>
       prev.map(el =>
@@ -157,7 +170,7 @@ export default function Page() {
       const el = eleves.find(e=> e.id === dragging.id)
 
       if(el){
-        updatePosition(el.id, el.tempX || 0, el.tempY || 0)
+        updatePosition(el.id, el.tempX ?? el.position_x ?? 0, el.tempY ?? el.position_y ?? 0)
       }
 
       setDragging(null)
@@ -172,7 +185,6 @@ export default function Page() {
         Groupe {groupeId}
       </h1>
 
-      {/* 🔥 BOUTONS */}
       <div className="flex gap-3 mb-4">
 
         <button
@@ -195,6 +207,18 @@ export default function Page() {
           Multi
         </button>
 
+        {multiMode && (
+          <button
+            onClick={()=>{
+              setMultiMode(false)
+              setMultiSelection([])
+            }}
+            className="bg-gray-500 text-white px-4 py-2 rounded-xl"
+          >
+            Annuler
+          </button>
+        )}
+
         {multiMode && multiSelection.length > 0 && (
           <button
             onClick={()=> setShowMultiSelect(true)}
@@ -206,27 +230,21 @@ export default function Page() {
 
       </div>
 
-      {/* 🔥 SELECT MULTI DIRECT */}
+      {/* 🔥 choix règles multi */}
       {showMultiSelect && (
-        <select
-          autoFocus
-          className="mb-4 p-3 border w-full text-lg"
-          onChange={(e)=>{
-            const regle = Number(e.target.value)
-            if(regle > 0){
-              appliquerMulti(regle)
-            }
-          }}
-        >
-          <option value="0">Choisir une règle</option>
-          <option value="1">règle 1</option>
-          <option value="2">règle 2</option>
-          <option value="3">règle 3</option>
-          <option value="4">règle 4</option>
-        </select>
+        <div className="flex gap-2 mb-4">
+          {[1,2,3,4].map(r => (
+            <button
+              key={r}
+              className="bg-black text-white px-4 py-2 rounded-xl"
+              onClick={()=> appliquerMulti(r)}
+            >
+              #{r}
+            </button>
+          ))}
+        </div>
       )}
 
-      {/* 🔥 PLAN */}
       <div
         className="relative w-full h-[600px] bg-gray-100 border rounded-xl"
         style={{ touchAction:"none" }}
@@ -262,32 +280,29 @@ export default function Page() {
               style={{
                 position:"absolute",
                 left:x,
-                top:isDragging ? y - 20 : y,
-                zIndex: isDragging ? 1000 : 1,
-                transform: isDragging ? "scale(1.1)" : "scale(1)"
+                top:y,
+                zIndex: isDragging ? 1000 : 1
               }}
 
-              onMouseDown={()=> {
+              onMouseDown={(ev)=> {
                 if(editMode){
-                  setDragging(e)
+                  startDrag(e,ev.clientX,ev.clientY)
+                }else{
+                  startLongPress()
+                }
+              }}
+
+              onTouchStart={(ev)=>{
+                const touch = ev.touches[0]
+
+                if(editMode){
+                  startDrag(e,touch.clientX,touch.clientY)
                 }else{
                   startLongPress()
                 }
               }}
 
               onMouseUp={cancelLongPress}
-              onMouseLeave={cancelLongPress}
-
-              onTouchStart={(ev)=>{
-                ev.preventDefault()
-
-                if(editMode){
-                  setDragging(e)
-                }else{
-                  startLongPress()
-                }
-              }}
-
               onTouchEnd={cancelLongPress}
             >
 
@@ -317,31 +332,20 @@ export default function Page() {
                 {e.nom}
               </button>
 
-              {/* 🔥 POP DIRECT */}
+              {/* 🔥 règles directes */}
               {!editMode && !multiMode && selection === e.id && (
 
-                <select
-                  autoFocus
-                  className="mt-2 p-2 border text-lg"
-                  onChange={(event)=>{
-
-                    const regle = Number(event.target.value)
-
-                    if(regle > 0){
-                      appliquerRegle(e,regle)
-                      setSelection(null)
-                    }
-
-                  }}
-                >
-
-                  <option value="0">Choisir une règle</option>
-                  <option value="1">règle 1</option>
-                  <option value="2">règle 2</option>
-                  <option value="3">règle 3</option>
-                  <option value="4">règle 4</option>
-
-                </select>
+                <div className="flex gap-2 mt-2">
+                  {[1,2,3,4].map(r => (
+                    <button
+                      key={r}
+                      className="bg-black text-white px-3 py-1 rounded-lg"
+                      onClick={()=> appliquerRegle(e,r)}
+                    >
+                      #{r}
+                    </button>
+                  ))}
+                </div>
 
               )}
 
