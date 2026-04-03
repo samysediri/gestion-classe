@@ -34,10 +34,7 @@ export default function Page() {
   async function updatePosition(id:number,x:number,y:number){
     await supabase
       .from("eleves")
-      .update({
-        position_x:x,
-        position_y:y
-      })
+      .update({ position_x:x, position_y:y })
       .eq("id",id)
   }
 
@@ -58,10 +55,7 @@ export default function Page() {
       )
     )
 
-    await supabase
-      .from("eleves")
-      .update(update)
-      .eq("id",e.id)
+    await supabase.from("eleves").update(update).eq("id",e.id)
 
     setSelection(null)
   }
@@ -83,18 +77,7 @@ export default function Page() {
 
   async function quitterGroupe(){
 
-    setEleves(prev =>
-      prev.map(e => ({
-        ...e,
-        niveau:0,
-        regle_manquement:0,
-        regle_retenue:0,
-        regle_retrait:0
-      }))
-    )
-
-    await supabase
-      .from("eleves")
+    await supabase.from("eleves")
       .update({
         niveau:0,
         regle_manquement:0,
@@ -103,12 +86,8 @@ export default function Page() {
       })
       .eq("groupe_id",groupeId)
 
-    await supabase
-      .from("config")
-      .update({
-        groupe_actif:null,
-        en_cours:false
-      })
+    await supabase.from("config")
+      .update({ groupe_actif:null, en_cours:false })
       .eq("id",1)
   }
 
@@ -135,7 +114,9 @@ export default function Page() {
 
   function startDrag(e:any,clientX:number,clientY:number){
 
-    const rect = e.target.getBoundingClientRect()
+    const rect = document.getElementById("btn-"+e.id)?.getBoundingClientRect()
+
+    if(!rect) return
 
     dragOffset.current = {
       x: clientX - rect.left,
@@ -185,12 +166,11 @@ export default function Page() {
         Groupe {groupeId}
       </h1>
 
+      {/* boutons */}
       <div className="flex gap-3 mb-4">
 
-        <button
-          onClick={quitterGroupe}
-          className="bg-red-700 text-white px-4 py-2 rounded-xl"
-        >
+        <button onClick={quitterGroupe}
+          className="bg-red-700 text-white px-4 py-2 rounded-xl">
           QUITTER
         </button>
 
@@ -230,28 +210,27 @@ export default function Page() {
 
       </div>
 
-      {/* 🔥 choix règles multi */}
       {showMultiSelect && (
         <div className="flex gap-2 mb-4">
           {[1,2,3,4].map(r => (
-            <button
-              key={r}
+            <button key={r}
               className="bg-black text-white px-4 py-2 rounded-xl"
-              onClick={()=> appliquerMulti(r)}
-            >
+              onClick={()=> appliquerMulti(r)}>
               #{r}
             </button>
           ))}
         </div>
       )}
 
+      {/* plan */}
       <div
         className="relative w-full h-[600px] bg-gray-100 border rounded-xl"
         style={{ touchAction:"none" }}
 
         onClick={(e)=>{
-          if(editMode && e.target === e.currentTarget){
+          if(e.target === e.currentTarget){
             setEditMode(false)
+            setSelection(null) // 🔥 FIX IMPORTANT
           }
         }}
 
@@ -268,8 +247,6 @@ export default function Page() {
         {eleves.map(e =>{
 
           const isDragging = dragging?.id === e.id
-          const isSelected = multiSelection.includes(e.id)
-
           const x = e.tempX ?? e.position_x ?? 0
           const y = e.tempY ?? e.position_y ?? 0
 
@@ -307,11 +284,11 @@ export default function Page() {
             >
 
               <button
+                id={"btn-"+e.id}
                 className={`
                   ${couleur(e.niveau)}
                   text-white px-6 py-4 rounded-xl
                   ${editMode ? "animate-pulse" : ""}
-                  ${isSelected ? "ring-4 ring-black" : ""}
                 `}
                 onClick={()=>{
                   if(!editMode){
@@ -332,7 +309,6 @@ export default function Page() {
                 {e.nom}
               </button>
 
-              {/* 🔥 règles directes */}
               {!editMode && !multiMode && selection === e.id && (
 
                 <div className="flex gap-2 mt-2">
@@ -360,5 +336,4 @@ export default function Page() {
     </div>
 
   )
-
 }
