@@ -30,10 +30,10 @@ export default function Ecran(){
     <div className="w-screen h-screen flex bg-gray-100">
 
       {/* MANQUEMENT */}
-      <div className="flex-1 flex flex-col bg-yellow-300 border-r-4 border-gray-200">
+      <div className="flex-1 flex flex-col bg-yellow-300 border-r-4 border-white">
 
         {/* TITRE */}
-        <div className="text-center text-5xl font-bold py-6 border-b-4 border-gray-200">
+        <div className="w-full bg-yellow-600 text-white text-center text-5xl font-bold py-6">
           Manquement
         </div>
 
@@ -51,9 +51,9 @@ export default function Ecran(){
       </div>
 
       {/* RETENUE */}
-      <div className="flex-1 flex flex-col bg-orange-300 border-r-4 border-gray-200">
+      <div className="flex-1 flex flex-col bg-orange-300 border-r-4 border-white">
 
-        <div className="text-center text-5xl font-bold py-6 border-b-4 border-gray-200">
+        <div className="w-full bg-orange-600 text-white text-center text-5xl font-bold py-6">
           Retenue
         </div>
 
@@ -72,7 +72,7 @@ export default function Ecran(){
       {/* RETRAIT */}
       <div className="flex-1 flex flex-col bg-red-300">
 
-        <div className="text-center text-5xl font-bold py-6 border-b-4 border-gray-200">
+        <div className="w-full bg-red-600 text-white text-center text-5xl font-bold py-6">
           Retrait
         </div>
 
