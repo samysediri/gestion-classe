@@ -14,7 +14,7 @@ export default function Page() {
   const [showMultiSelect,setShowMultiSelect] = useState(false)
 
   const params = useParams()
-  const groupeId = params.id
+  const groupeId = Number(params.id)
 
   async function chargerEleves(){
 
@@ -25,6 +25,16 @@ export default function Page() {
       .order("id")
 
     setEleves(data || [])
+  }
+
+  // 🔥 NOUVEAU → mettre le groupe actif
+  async function setGroupeActif(){
+
+    await supabase
+      .from("config")
+      .update({ groupe_actif: groupeId })
+      .eq("id",1)
+
   }
 
   async function appliquerRegle(e:any,regle:number){
@@ -96,7 +106,12 @@ export default function Page() {
   }
 
   useEffect(()=>{
+
     chargerEleves()
+
+    // 🔥 TRÈS IMPORTANT → mettre groupe actif
+    setGroupeActif()
+
   },[])
 
   return(
