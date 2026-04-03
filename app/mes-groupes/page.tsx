@@ -14,6 +14,7 @@ export default function Page(){
 
   const router = useRouter()
 
+  // 🔥 charger groupes
   async function chargerGroupes(){
 
     const {data,error} = await supabase
@@ -22,9 +23,12 @@ export default function Page(){
       .order("id")
 
     if(error){
-      console.log("ERREUR GROUPES:", error)
+      console.log("ERREUR LOAD GROUPES:", error)
+      alert("Erreur chargement groupes")
       return
     }
+
+    console.log("GROUPES:", data)
 
     setGroupes(data || [])
   }
@@ -33,19 +37,24 @@ export default function Page(){
     chargerGroupes()
   },[])
 
+  // 🔥 AJOUT GROUPE
   async function ajouterGroupe(){
 
-    console.log("CLICK créer")
+    alert("clic détecté") // 🔥 DEBUG
 
     if(!numero){
       alert("Entre un numéro de groupe")
       return
     }
 
-    // 🔥 INSERT GROUPE
+    console.log("Création groupe:", numero)
+
+    // 🔥 créer groupe
     const {data:groupe,error} = await supabase
       .from("groupes")
-      .insert({ numero })
+      .insert({
+        numero: numero
+      })
       .select()
       .single()
 
@@ -55,11 +64,11 @@ export default function Page(){
       return
     }
 
-    console.log("GROUPE CRÉÉ:", groupe)
+    console.log("GROUPE OK:", groupe)
 
     const groupeId = groupe.id
 
-    // 🔥 LISTE ÉLÈVES
+    // 🔥 élèves
     const liste = elevesText
       .split("\n")
       .map(n => n.trim())
@@ -84,6 +93,7 @@ export default function Page(){
 
       if(errEleves){
         console.log("ERREUR ELEVE:", errEleves)
+        alert("Erreur ajout élèves")
       }
     }
 
@@ -120,7 +130,7 @@ export default function Page(){
           </h2>
 
           <input
-            placeholder="Numéro du groupe (ex: 204)"
+            placeholder="Numéro du groupe (ex: 101)"
             value={numero}
             onChange={e=> setNumero(e.target.value)}
             className="w-full mb-4 p-3 border rounded"
@@ -169,8 +179,7 @@ Mathis`}
             className="p-6 bg-blue-500 text-white rounded-xl cursor-pointer text-xl text-center"
             onClick={()=> router.push(`/telecommande/${g.id}`)}
           >
-            {/* 🔥 FIX ICI */}
-            Groupe {g.numero || "???"}
+            {g.numero}
           </div>
 
         ))}
