@@ -25,6 +25,7 @@ export default function Page() {
   const groupeId = Number(params.id)
 
   async function entrerGroupe(){
+
     const { data } = await supabase
       .from("config")
       .select("*")
@@ -85,7 +86,6 @@ export default function Page() {
     setSelection(null)
   }
 
-  // 🔴 RETRAIT DIRECT
   async function appliquerRetraitDirect(e:any,regle:number){
 
     const update = {
@@ -108,6 +108,7 @@ export default function Page() {
   }
 
   async function appliquerMulti(regle:number){
+
     const selectionnes = eleves.filter(e =>
       multiSelection.includes(e.id)
     )
@@ -121,8 +122,21 @@ export default function Page() {
     setMultiMode(false)
   }
 
+  // 🔥 FIX QUITTER PARFAIT
   async function quitterGroupe(){
 
+    // reset visuel instantané
+    setEleves(prev =>
+      prev.map(e => ({
+        ...e,
+        niveau:0,
+        regle_manquement:0,
+        regle_retenue:0,
+        regle_retrait:0
+      }))
+    )
+
+    // reset DB (SANS toucher positions)
     await supabase
       .from("eleves")
       .update({
@@ -133,6 +147,7 @@ export default function Page() {
       })
       .eq("groupe_id",groupeId)
 
+    // libérer groupe
     await supabase
       .from("config")
       .update({
@@ -141,7 +156,13 @@ export default function Page() {
       })
       .eq("id",1)
 
+    // reset UI
     setSelection(null)
+    setEditMode(false)
+    setMultiMode(false)
+    setMultiSelection([])
+    setShowMultiSelect(false)
+    setRetraitDirect(false)
   }
 
   useEffect(()=>{
@@ -270,6 +291,11 @@ export default function Page() {
         className="relative w-full h-[600px] bg-gray-100 border rounded-xl"
         style={{ touchAction:"none" }}
 
+        // 🔥 ferme règles PARTOUT
+        onClick={()=>{
+          setSelection(null)
+        }}
+
         onMouseMove={(e)=> handleMove(e.clientX,e.clientY,e.currentTarget)}
         onMouseUp={handleEnd}
 
@@ -315,7 +341,9 @@ export default function Page() {
               <button
                 id={"btn-"+e.id}
                 className={`${couleur(e.niveau)} text-white px-6 py-4 rounded-xl ${editMode ? "wiggle" : ""}`}
-                onClick={()=>{
+                onClick={(ev)=>{
+
+                  ev.stopPropagation()
 
                   if(editMode) return
 
@@ -339,7 +367,6 @@ export default function Page() {
                 {e.nom}
               </button>
 
-              {/* règles */}
               {selection === e.id && !editMode && (
 
                 <div className="flex gap-2 mt-2">
@@ -348,11 +375,13 @@ export default function Page() {
                       key={r}
                       className="bg-black text-white px-3 py-1 rounded-lg"
                       onClick={()=>{
+
                         if(retraitDirect){
                           appliquerRetraitDirect(e,r)
                         }else{
                           appliquerRegle(e,r)
                         }
+
                       }}
                     >
                       #{r}
