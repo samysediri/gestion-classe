@@ -24,6 +24,7 @@ export default function Page() {
   const params = useParams()
   const groupeId = Number(params.id)
 
+  // 🔥 ENTRER GROUPE
   async function entrerGroupe(){
 
     const { data } = await supabase
@@ -107,25 +108,8 @@ export default function Page() {
     setRetraitDirect(false)
   }
 
-  async function appliquerMulti(regle:number){
-
-    const selectionnes = eleves.filter(e =>
-      multiSelection.includes(e.id)
-    )
-
-    for(const e of selectionnes){
-      await appliquerRegle(e,regle)
-    }
-
-    setMultiSelection([])
-    setShowMultiSelect(false)
-    setMultiMode(false)
-  }
-
-  // 🔥 FIX QUITTER PARFAIT
   async function quitterGroupe(){
 
-    // reset visuel instantané
     setEleves(prev =>
       prev.map(e => ({
         ...e,
@@ -136,7 +120,6 @@ export default function Page() {
       }))
     )
 
-    // reset DB (SANS toucher positions)
     await supabase
       .from("eleves")
       .update({
@@ -147,7 +130,6 @@ export default function Page() {
       })
       .eq("groupe_id",groupeId)
 
-    // libérer groupe
     await supabase
       .from("config")
       .update({
@@ -156,7 +138,7 @@ export default function Page() {
       })
       .eq("id",1)
 
-    // reset UI
+    // 🔥 reset UI complet
     setSelection(null)
     setEditMode(false)
     setMultiMode(false)
@@ -291,9 +273,10 @@ export default function Page() {
         className="relative w-full h-[600px] bg-gray-100 border rounded-xl"
         style={{ touchAction:"none" }}
 
-        // 🔥 ferme règles PARTOUT
+        // 🔥 FIX FINAL
         onClick={()=>{
           setSelection(null)
+          setEditMode(false)
         }}
 
         onMouseMove={(e)=> handleMove(e.clientX,e.clientY,e.currentTarget)}
@@ -402,4 +385,4 @@ export default function Page() {
     </div>
 
   )
-}
+}p
