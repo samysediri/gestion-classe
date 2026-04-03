@@ -16,8 +16,8 @@ export default function Page() {
   const params = useParams()
   const groupeId = Number(params.id)
 
+  // 🔥 charger élèves du groupe
   async function chargerEleves(){
-
     const {data} = await supabase
       .from("eleves")
       .select("*")
@@ -27,16 +27,34 @@ export default function Page() {
     setEleves(data || [])
   }
 
-  // 🔥 NOUVEAU → mettre le groupe actif
-  async function setGroupeActif(){
+  // 🔥 entrer dans un groupe (avec blocage)
+  async function entrerGroupe(){
 
+    const { data } = await supabase
+      .from("config")
+      .select("*")
+      .eq("id",1)
+      .single()
+
+    // ❌ autre groupe actif
+    if(data.en_cours && data.groupe_actif !== groupeId){
+      alert("Un autre groupe est déjà en cours")
+      return false
+    }
+
+    // ✅ activer ce groupe
     await supabase
       .from("config")
-      .update({ groupe_actif: groupeId })
+      .update({
+        groupe_actif: groupeId,
+        en_cours: true
+      })
       .eq("id",1)
 
+    return true
   }
 
+  // 🔥 appliquer règle à un élève
   async function appliquerRegle(e:any,regle:number){
 
     let nouveau = e.niveau + 1
@@ -60,6 +78,7 @@ export default function Page() {
       .eq("id",e.id)
   }
 
+  // 🔥 multi sélection
   async function appliquerMulti(regle:number){
 
     const selectionnes = eleves.filter(e =>
@@ -75,8 +94,10 @@ export default function Page() {
     setMultiMode(false)
   }
 
+  // 🔥 QUITTER (libère le système)
   async function quitterGroupe(){
 
+    // reset visuel
     setEleves(prev =>
       prev.map(e => ({
         ...e,
@@ -87,6 +108,7 @@ export default function Page() {
       }))
     )
 
+    // reset DB
     await supabase
       .from("eleves")
       .update({
@@ -96,6 +118,15 @@ export default function Page() {
         regle_retrait:0
       })
       .eq("groupe_id",groupeId)
+
+    // 🔥 libérer groupe actif
+    await supabase
+      .from("config")
+      .update({
+        groupe_actif: null,
+        en_cours: false
+      })
+      .eq("id",1)
   }
 
   function couleur(niveau:number){
@@ -105,12 +136,20 @@ export default function Page() {
     return "bg-red-500"
   }
 
+  // 🔥 INIT (entrée dans groupe)
   useEffect(()=>{
 
-    chargerEleves()
+    async function init(){
 
-    // 🔥 TRÈS IMPORTANT → mettre groupe actif
-    setGroupeActif()
+      const ok = await entrerGroupe()
+
+      if(ok){
+        chargerEleves()
+      }
+
+    }
+
+    init()
 
   },[])
 
