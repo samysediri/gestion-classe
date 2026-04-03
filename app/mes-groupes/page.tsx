@@ -16,10 +16,15 @@ export default function Page(){
 
   async function chargerGroupes(){
 
-    const {data} = await supabase
+    const {data,error} = await supabase
       .from("groupes")
       .select("*")
       .order("id")
+
+    if(error){
+      console.log("ERREUR GROUPES:", error)
+      return
+    }
 
     setGroupes(data || [])
   }
@@ -30,25 +35,31 @@ export default function Page(){
 
   async function ajouterGroupe(){
 
-    if(!numero) return alert("Entre un numéro de groupe")
+    console.log("CLICK créer")
 
-    // 🔥 créer groupe
+    if(!numero){
+      alert("Entre un numéro de groupe")
+      return
+    }
+
+    // 🔥 INSERT GROUPE
     const {data:groupe,error} = await supabase
       .from("groupes")
-      .insert({
-        numero: numero
-      })
+      .insert({ numero })
       .select()
       .single()
 
     if(error){
-      console.log(error)
+      console.log("ERREUR INSERT GROUPE:", error)
+      alert("Erreur création groupe (regarde console)")
       return
     }
 
+    console.log("GROUPE CRÉÉ:", groupe)
+
     const groupeId = groupe.id
 
-    // 🔥 créer élèves
+    // 🔥 LISTE ÉLÈVES
     const liste = elevesText
       .split("\n")
       .map(n => n.trim())
@@ -66,9 +77,14 @@ export default function Page(){
     }))
 
     if(elevesToInsert.length > 0){
-      await supabase
+
+      const {error:errEleves} = await supabase
         .from("eleves")
         .insert(elevesToInsert)
+
+      if(errEleves){
+        console.log("ERREUR ELEVE:", errEleves)
+      }
     }
 
     // reset
@@ -150,10 +166,11 @@ Mathis`}
 
           <div
             key={g.id}
-            className="p-6 bg-blue-500 text-white rounded-xl cursor-pointer"
+            className="p-6 bg-blue-500 text-white rounded-xl cursor-pointer text-xl text-center"
             onClick={()=> router.push(`/telecommande/${g.id}`)}
           >
-            Groupe {g.numero}
+            {/* 🔥 FIX ICI */}
+            Groupe {g.numero || "???"}
           </div>
 
         ))}
