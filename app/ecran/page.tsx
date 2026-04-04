@@ -97,22 +97,23 @@ export default function Ecran() {
       console.error("ERREUR CHARGEMENT ÉLÈVES:", elevesError)
       setEleves([])
     } else {
-      setEleves((elevesData as Eleve[]) || [])
+      setEleves((elevesData ?? []) as Eleve[])
     }
 
     if (toilettesActivesError) {
       console.error("ERREUR TOILETTES ACTIVES:", toilettesActivesError)
       setToilettesActives([])
     } else {
-      setToilettesActives((toilettesActivesData as ToiletteRecord[]) || [])
+      setToilettesActives((toilettesActivesData ?? []) as ToiletteRecord[])
     }
 
- if (toilettesHistError) {
-  console.error("ERREUR TOILETTES HIST:", toilettesHistError)
-  setToilettesDernieres([])
-} else {
-  setToilettesDernieres((toilettesHistData ?? []) as ToiletteRecord[])
-}
+    if (toilettesHistError) {
+      console.error("ERREUR TOILETTES HIST:", toilettesHistError)
+      setToilettesDernieres([])
+    } else {
+      setToilettesDernieres((toilettesHistData ?? []) as ToiletteRecord[])
+    }
+  }
 
   useEffect(() => {
     charger()
