@@ -90,7 +90,7 @@ export default function Ecran() {
         .eq("groupe_id", config.groupe_actif)
         .eq("actif", false)
         .order("ended_at", { ascending: false })
-        .limit(20),
+        .limit(50),
     ])
 
     if (elevesError) {
@@ -262,6 +262,7 @@ export default function Ecran() {
   }
 
   function renderToiletteSlot(record: ToiletteRecord | null, slot: number) {
+    const hasRecord = !!record
     const isActive = !!record?.actif
 
     return (
@@ -271,7 +272,7 @@ export default function Ecran() {
       >
         <div className="relative flex items-center justify-center w-20 h-20 rounded-2xl bg-gray-100 shrink-0">
           <div className="text-[3.6rem] leading-none">🚽</div>
-          {isActive && renderRedXOverlay()}
+          {hasRecord && renderRedXOverlay()}
         </div>
 
         <div className="min-w-0 flex-1">
