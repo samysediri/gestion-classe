@@ -107,13 +107,12 @@ export default function Ecran() {
       setToilettesActives((toilettesActivesData as ToiletteRecord[]) || [])
     }
 
-    if (toilettesHistError) {
-      console.error("ERREUR TOILETTES HIST:", toilettesHistError)
-      setToilettesDernieres((toilettesHistData as ToiletteRecord[]) || [])
-    } else {
-      setToilettesDernieres((toilettesHistData as ToiletteRecord[]) || [])
-    }
-  }
+ if (toilettesHistError) {
+  console.error("ERREUR TOILETTES HIST:", toilettesHistError)
+  setToilettesDernieres([])
+} else {
+  setToilettesDernieres((toilettesHistData ?? []) as ToiletteRecord[])
+}
 
   useEffect(() => {
     charger()
