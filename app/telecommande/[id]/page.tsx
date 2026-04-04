@@ -287,7 +287,7 @@ export default function Page() {
   useEffect(() => {
     const interval = setInterval(() => {
       chargerToilettesActives()
-    }, 1500)
+    }, 900)
 
     return () => clearInterval(interval)
   }, [groupeId])
@@ -452,33 +452,50 @@ export default function Page() {
   }
 
   async function envoyerAuxToilettes(e: Eleve) {
-    const dejaActif = toilettesActives.find(
-      (t) => t.actif && t.eleve_id === e.id
-    )
+    const { data: actifsData, error: loadError } = await supabase
+      .from("toilettes")
+      .select("*")
+      .eq("groupe_id", groupeId)
+      .eq("actif", true)
+      .order("slot")
 
+    if (loadError) {
+      console.error("ERREUR LOAD TOILETTES:", loadError)
+      alert("Erreur toilettes")
+      return
+    }
+
+    const actives = (actifsData as ToiletteRecord[]) || []
+
+    const dejaActif = actives.find((t) => t.eleve_id === e.id)
     if (dejaActif) {
-      alert(`${e.nom} est déjà aux toilettes.`)
+      setToilettesActives(actives)
       return
     }
 
     const slotLibre = [1, 2].find(
-      (slot) => !toilettesActives.some((t) => t.actif && t.slot === slot)
+      (slot) => !actives.some((t) => t.slot === slot)
     )
 
     if (!slotLibre) {
       alert("Les deux toilettes sont déjà occupées.")
+      setToilettesActives(actives)
       return
     }
 
-    const { error } = await supabase.from("toilettes").insert([
-      {
-        groupe_id: groupeId,
-        eleve_id: e.id,
-        eleve_nom: e.nom,
-        slot: slotLibre,
-        actif: true,
-      },
-    ])
+    const { data: inserted, error } = await supabase
+      .from("toilettes")
+      .insert([
+        {
+          groupe_id: groupeId,
+          eleve_id: e.id,
+          eleve_nom: e.nom,
+          slot: slotLibre,
+          actif: true,
+        },
+      ])
+      .select()
+      .single()
 
     if (error) {
       console.error("ERREUR ENVOI TOILETTES:", error)
@@ -486,8 +503,14 @@ export default function Page() {
       return
     }
 
-    await chargerToilettesActives()
-    setSelection(null)
+    const nouveauRecord = inserted as ToiletteRecord
+
+    setToilettesActives((prev) => {
+      const sansSlot = prev.filter((t) => t.slot !== nouveauRecord.slot)
+      return [...sansSlot, nouveauRecord].sort((a, b) => a.slot - b.slot)
+    })
+
+    setSelection(e.id)
   }
 
   async function retourDesToilettes(e: Eleve) {
@@ -496,7 +519,6 @@ export default function Page() {
     )
 
     if (!record) {
-      alert("Cet élève n'est pas actuellement aux toilettes.")
       return
     }
 
@@ -521,8 +543,8 @@ export default function Page() {
       return
     }
 
-    await chargerToilettesActives()
-    setSelection(null)
+    setToilettesActives((prev) => prev.filter((t) => t.id !== record.id))
+    setSelection(e.id)
   }
 
   async function quitterGroupe() {
@@ -737,6 +759,15 @@ export default function Page() {
             RETRAIT DIRECT
           </button>
 
+          {selectedEleve && toiletteActiveSelection && (
+            <button
+              onClick={() => retourDesToilettes(selectedEleve)}
+              className="bg-emerald-600 text-white px-3 py-2 rounded-2xl text-sm"
+            >
+              REVENU 🚽
+            </button>
+          )}
+
           {multiMode && !multiReadyForRule && (
             <button
               onClick={() => {
@@ -796,20 +827,6 @@ export default function Page() {
             >
               🚽
             </button>
-
-            {toiletteActiveSelection && (
-              <button
-                className="bg-emerald-600 text-white px-3 py-1.5 rounded-xl text-sm"
-                onClick={() => {
-                  if (selectedEleve) {
-                    retourDesToilettes(selectedEleve)
-                  }
-                }}
-                title="Revenu des toilettes"
-              >
-                Revenu 🚽
-              </button>
-            )}
           </div>
         )}
 
