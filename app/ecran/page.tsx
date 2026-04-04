@@ -62,20 +62,22 @@ export default function Ecran() {
 
     setPhaseCours(normalizePhase(config.phase_cours))
 
-    const [{ data: elevesData, error: elevesError }, { data: toilettesData, error: toilettesError }] =
-      await Promise.all([
-        supabase
-          .from("eleves")
-          .select("*")
-          .eq("groupe_id", config.groupe_actif)
-          .order("id", { ascending: true }),
-        supabase
-          .from("toilettes")
-          .select("*")
-          .eq("groupe_id", config.groupe_actif)
-          .order("created_at", { ascending: false })
-          .limit(20),
-      ])
+    const [
+      { data: elevesData, error: elevesError },
+      { data: toilettesData, error: toilettesError },
+    ] = await Promise.all([
+      supabase
+        .from("eleves")
+        .select("*")
+        .eq("groupe_id", config.groupe_actif)
+        .order("id", { ascending: true }),
+      supabase
+        .from("toilettes")
+        .select("*")
+        .eq("groupe_id", config.groupe_actif)
+        .order("created_at", { ascending: false })
+        .limit(20),
+    ])
 
     if (elevesError) {
       console.error("ERREUR CHARGEMENT ÉLÈVES:", elevesError)
@@ -97,7 +99,7 @@ export default function Ecran() {
 
     const interval = setInterval(() => {
       charger()
-    }, 1500)
+    }, 900)
 
     const tick = setInterval(() => {
       setNowMs(Date.now())
@@ -137,15 +139,15 @@ export default function Ecran() {
   )
 
   function getTextSize(count: number) {
-    if (count <= 2) return "text-[clamp(2.4rem,5vw,5rem)]"
-    if (count <= 4) return "text-[clamp(1.8rem,3.9vw,4rem)]"
-    if (count <= 6) return "text-[clamp(1.4rem,2.9vw,3rem)]"
-    if (count <= 8) return "text-[clamp(1.1rem,2.3vw,2.3rem)]"
-    return "text-[clamp(0.95rem,1.7vw,1.7rem)]"
+    if (count <= 2) return "text-[clamp(2.6rem,5.2vw,5.4rem)]"
+    if (count <= 4) return "text-[clamp(2rem,4.2vw,4.3rem)]"
+    if (count <= 6) return "text-[clamp(1.6rem,3.2vw,3.2rem)]"
+    if (count <= 8) return "text-[clamp(1.25rem,2.5vw,2.5rem)]"
+    return "text-[clamp(1rem,1.8vw,1.8rem)]"
   }
 
   function getHeaderTextClass() {
-    return "text-[clamp(1.2rem,2.4vw,2.8rem)]"
+    return "text-[clamp(1.6rem,2.8vw,3.2rem)]"
   }
 
   function getSpacingClass(count: number) {
@@ -200,7 +202,7 @@ export default function Ecran() {
     return (
       <div className={`flex-1 min-w-0 flex flex-col ${bodyBg} border-r-4 border-white last:border-r-0`}>
         <div
-          className={`w-full ${headerBg} text-white text-center font-bold py-[clamp(0.7rem,1.2vw,1.4rem)] ${getHeaderTextClass()} leading-none`}
+          className={`w-full ${headerBg} text-white text-center font-bold py-[clamp(0.8rem,1.3vw,1.5rem)] ${getHeaderTextClass()} leading-none`}
         >
           {titre}
         </div>
@@ -231,12 +233,12 @@ export default function Ecran() {
     return (
       <div
         key={slot}
-        className="relative flex items-center gap-3 rounded-xl border border-gray-300 bg-white px-3 py-2 min-w-[230px] max-w-[320px]"
+        className="relative flex items-center gap-4 rounded-2xl border-2 border-gray-300 bg-white px-5 py-3 min-w-[330px] max-w-[420px]"
       >
-        <div className="relative flex items-center justify-center w-12 h-12 rounded-lg bg-gray-100 text-3xl">
+        <div className="relative flex items-center justify-center w-20 h-20 rounded-2xl bg-gray-100 text-[3.5rem] shrink-0">
           🚽
           {isActive && (
-            <div className="absolute inset-0 flex items-center justify-center text-red-600 font-black text-4xl leading-none">
+            <div className="absolute inset-0 flex items-center justify-center text-red-600 font-black text-[4.6rem] leading-none">
               ✕
             </div>
           )}
@@ -245,17 +247,21 @@ export default function Ecran() {
         <div className="min-w-0 flex-1">
           {record ? (
             <>
-              <div className="font-bold text-[clamp(0.95rem,1.3vw,1.2rem)] truncate">
+              <div className="font-bold text-[clamp(1.4rem,1.9vw,2rem)] truncate text-gray-900">
                 {record.eleve_nom}
               </div>
-              <div className={`${isActive ? "text-red-600" : "text-gray-700"} font-bold text-[clamp(0.95rem,1.4vw,1.25rem)]`}>
+              <div className={`${isActive ? "text-red-600" : "text-gray-700"} font-bold text-[clamp(1.45rem,2vw,2.1rem)] leading-none mt-1`}>
                 {getDisplayDuration(record)}
               </div>
             </>
           ) : (
             <>
-              <div className="font-semibold text-gray-400">Libre</div>
-              <div className="text-gray-300 font-bold">00:00</div>
+              <div className="font-semibold text-[clamp(1.25rem,1.6vw,1.8rem)] text-gray-400">
+                Libre
+              </div>
+              <div className="text-gray-300 font-bold text-[clamp(1.25rem,1.7vw,1.8rem)] leading-none mt-1">
+                00:00
+              </div>
             </>
           )}
         </div>
@@ -299,17 +305,17 @@ export default function Ecran() {
             )}
           </div>
 
-          <div className="h-[16%] w-full bg-white border-t-4 border-gray-200 px-4 py-3 flex items-center justify-between gap-4 overflow-hidden">
-            <div className="flex items-center gap-3 min-w-0">
+          <div className="h-[19%] w-full bg-white border-t-4 border-gray-200 px-5 py-3 flex items-center justify-between gap-5 overflow-hidden">
+            <div className="flex items-center gap-4 min-w-0">
               {renderToiletteSlot(toilettesParSlot[0], 1)}
               {renderToiletteSlot(toilettesParSlot[1], 2)}
             </div>
 
-            <div className="shrink-0 rounded-xl bg-indigo-50 border border-indigo-200 px-4 py-3 text-center">
-              <div className="text-[clamp(0.7rem,0.9vw,0.9rem)] font-semibold text-indigo-500 uppercase tracking-wide">
+            <div className="shrink-0 rounded-2xl bg-indigo-50 border-2 border-indigo-200 px-6 py-4 text-center min-w-[280px]">
+              <div className="text-[clamp(1rem,1.2vw,1.2rem)] font-semibold text-indigo-500 uppercase tracking-wide">
                 Section du cours
               </div>
-              <div className="font-bold text-[clamp(1rem,1.4vw,1.45rem)] text-indigo-900">
+              <div className="font-bold text-[clamp(1.8rem,2vw,2.3rem)] text-indigo-900 mt-1">
                 {getPhaseLabel(phaseCours)}
               </div>
             </div>
