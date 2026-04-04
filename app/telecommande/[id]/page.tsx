@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { supabase } from "../../../lib/supabase"
+import { supabase } from "../../lib/supabase"
 import { useParams } from "next/navigation"
 
 type Eleve = {
@@ -339,17 +339,9 @@ export default function Page() {
 
     const update: Partial<Eleve> = { niveau: nouveau }
 
-    if (nouveau === 1) {
-      update.regle_manquement = regle
-    }
-
-    if (nouveau === 2) {
-      update.regle_retenue = regle
-    }
-
-    if (nouveau === 3) {
-      update.regle_retrait = regle
-    }
+    if (nouveau === 1) update.regle_manquement = regle
+    if (nouveau === 2) update.regle_retenue = regle
+    if (nouveau === 3) update.regle_retrait = regle
 
     return update
   }
@@ -425,12 +417,11 @@ export default function Page() {
   }
 
   async function envoyerAuxToilettes(e: Eleve) {
-    const { data: actifsData, error: loadError } = await supabase
+    const { data: allRows, error: loadError } = await supabase
       .from("toilettes")
       .select("*")
       .eq("groupe_id", groupeId)
-      .eq("actif", true)
-      .order("slot", { ascending: true })
+      .order("created_at", { ascending: true })
 
     if (loadError) {
       console.error("ERREUR LOAD TOILETTES:", loadError)
@@ -438,38 +429,42 @@ export default function Page() {
       return
     }
 
-    const actives = (actifsData as ToiletteRecord[]) || []
+    const toutes = (allRows as ToiletteRecord[]) || []
 
-    const dejaActif = actives.find((t) => t.eleve_id === e.id)
+    const dejaActif = toutes.find((t) => t.actif && t.eleve_id === e.id)
     if (dejaActif) {
-      setToilettesActives(actives)
+      await chargerToilettesActives()
       setSelection(e.id)
       return
     }
 
-    const slotLibre = [1, 2].find(
-      (slot) => !actives.some((t) => t.slot === slot)
+    const slotsDejaUtilises = new Set(toutes.map((t) => t.slot))
+    let slotChoisi: number | undefined = [1, 2].find(
+      (slot) => !slotsDejaUtilises.has(slot)
     )
 
-    if (!slotLibre) {
-      alert("Les deux toilettes sont déjà occupées.")
-      setToilettesActives(actives)
+    if (!slotChoisi) {
+      const actives = toutes.filter((t) => t.actif)
+      slotChoisi = [1, 2].find(
+        (slot) => !actives.some((t) => t.slot === slot)
+      )
+    }
+
+    if (!slotChoisi) {
+      alert("Les deux emplacements toilettes sont déjà utilisés pour cette période. Clique sur QUITTER pour repartir à neuf.")
+      await chargerToilettesActives()
       return
     }
 
-    const { data: inserted, error } = await supabase
-      .from("toilettes")
-      .insert([
-        {
-          groupe_id: groupeId,
-          eleve_id: e.id,
-          eleve_nom: e.nom,
-          slot: slotLibre,
-          actif: true,
-        },
-      ])
-      .select()
-      .single()
+    const { error } = await supabase.from("toilettes").insert([
+      {
+        groupe_id: groupeId,
+        eleve_id: e.id,
+        eleve_nom: e.nom,
+        slot: slotChoisi,
+        actif: true,
+      },
+    ])
 
     if (error) {
       console.error("ERREUR ENVOI TOILETTES:", error)
@@ -477,14 +472,7 @@ export default function Page() {
       return
     }
 
-    const nouveau = inserted as ToiletteRecord
-
-    setToilettesActives((prev) =>
-      [...prev.filter((t) => t.slot !== nouveau.slot), nouveau].sort(
-        (a, b) => a.slot - b.slot
-      )
-    )
-
+    await chargerToilettesActives()
     setSelection(e.id)
   }
 
@@ -516,13 +504,12 @@ export default function Page() {
       return
     }
 
-    setToilettesActives((prev) => prev.filter((t) => t.id !== record.id))
+    await chargerToilettesActives()
     setSelection(e.id)
   }
 
   async function quitterGroupe() {
     await sauvegarderToutesPositions()
-
     await viderToilettesDuGroupe(groupeId)
 
     await supabase
@@ -741,8 +728,40 @@ export default function Page() {
               REVENU 🚽
             </button>
           )}
+        </div>
 
-          {multiMode && !multiReadyForRule && (
+        {showActionBar && (
+          <div className="flex items-center flex-wrap gap-2 mb-2 rounded-2xl bg-gray-100 px-3 py-2">
+            <div className="text-sm font-medium w-full">
+              {selectedEleve?.nom}
+            </div>
+
+            {[1, 2, 3, 4].map((r) => (
+              <button
+                key={r}
+                className="bg-black text-white px-3 py-1.5 rounded-xl text-sm"
+                onClick={() => {
+                  if (selectedEleve) appliquerRegle(selectedEleve, r)
+                }}
+              >
+                #{r}
+              </button>
+            ))}
+
+            <button
+              className="bg-sky-600 text-white px-3 py-1.5 rounded-xl text-lg"
+              onClick={() => {
+                if (selectedEleve) envoyerAuxToilettes(selectedEleve)
+              }}
+              title="Envoyer aux toilettes"
+            >
+              🚽
+            </button>
+          </div>
+        )}
+
+        {multiMode && !multiReadyForRule && (
+          <div className="flex items-center flex-wrap gap-2 mb-2">
             <button
               onClick={() => {
                 if (multiSelection.length === 0) return
@@ -758,48 +777,12 @@ export default function Page() {
             >
               OK ({multiSelection.length})
             </button>
-          )}
 
-          {multiMode && (
             <button
               onClick={annulerMulti}
               className="bg-gray-500 text-white px-3 py-2 rounded-2xl text-sm"
             >
               ANNULER
-            </button>
-          )}
-        </div>
-
-        {showActionBar && (
-          <div className="flex items-center flex-wrap gap-2 mb-2 rounded-2xl bg-gray-100 px-3 py-2">
-            <div className="text-sm font-medium w-full">
-              {selectedEleve?.nom}
-            </div>
-
-            {[1, 2, 3, 4].map((r) => (
-              <button
-                key={r}
-                className="bg-black text-white px-3 py-1.5 rounded-xl text-sm"
-                onClick={() => {
-                  if (selectedEleve) {
-                    appliquerRegle(selectedEleve, r)
-                  }
-                }}
-              >
-                #{r}
-              </button>
-            ))}
-
-            <button
-              className="bg-sky-600 text-white px-3 py-1.5 rounded-xl text-lg"
-              onClick={() => {
-                if (selectedEleve) {
-                  envoyerAuxToilettes(selectedEleve)
-                }
-              }}
-              title="Envoyer aux toilettes"
-            >
-              🚽
             </button>
           </div>
         )}
