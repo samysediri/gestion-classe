@@ -151,41 +151,14 @@ export default function Page() {
     }
   }
 
-  async function closeActiveToilettesForGroup(groupIdToClose: number) {
-    const { data, error } = await supabase
+  async function viderToilettesDuGroupe(groupIdToClose: number) {
+    const { error } = await supabase
       .from("toilettes")
-      .select("*")
+      .delete()
       .eq("groupe_id", groupIdToClose)
-      .eq("actif", true)
-      .order("slot")
 
     if (error) {
-      console.error("ERREUR LOAD TOILETTES ACTIVES:", error)
-      return
-    }
-
-    const actives = (data as ToiletteRecord[]) || []
-    const nowIso = new Date().toISOString()
-
-    for (const record of actives) {
-      const startedMs = new Date(record.started_at).getTime()
-      const dureeSecondes = Math.max(
-        0,
-        Math.round((Date.now() - startedMs) / 1000)
-      )
-
-      const { error: updateError } = await supabase
-        .from("toilettes")
-        .update({
-          actif: false,
-          ended_at: nowIso,
-          duree_secondes: dureeSecondes,
-        })
-        .eq("id", record.id)
-
-      if (updateError) {
-        console.error("ERREUR CLOSE TOILETTE:", updateError)
-      }
+      console.error("ERREUR DELETE TOILETTES:", error)
     }
   }
 
@@ -213,7 +186,7 @@ export default function Page() {
         })
         .eq("groupe_id", data.groupe_actif)
 
-      await closeActiveToilettesForGroup(data.groupe_actif)
+      await viderToilettesDuGroupe(data.groupe_actif)
     }
 
     await supabase
@@ -256,7 +229,7 @@ export default function Page() {
       .select("*")
       .eq("groupe_id", groupeId)
       .eq("actif", true)
-      .order("slot")
+      .order("slot", { ascending: true })
 
     if (error) {
       console.error("ERREUR CHARGEMENT TOILETTES:", error)
@@ -287,7 +260,7 @@ export default function Page() {
   useEffect(() => {
     const interval = setInterval(() => {
       chargerToilettesActives()
-    }, 900)
+    }, 800)
 
     return () => clearInterval(interval)
   }, [groupeId])
@@ -457,7 +430,7 @@ export default function Page() {
       .select("*")
       .eq("groupe_id", groupeId)
       .eq("actif", true)
-      .order("slot")
+      .order("slot", { ascending: true })
 
     if (loadError) {
       console.error("ERREUR LOAD TOILETTES:", loadError)
@@ -470,6 +443,7 @@ export default function Page() {
     const dejaActif = actives.find((t) => t.eleve_id === e.id)
     if (dejaActif) {
       setToilettesActives(actives)
+      setSelection(e.id)
       return
     }
 
@@ -503,12 +477,13 @@ export default function Page() {
       return
     }
 
-    const nouveauRecord = inserted as ToiletteRecord
+    const nouveau = inserted as ToiletteRecord
 
-    setToilettesActives((prev) => {
-      const sansSlot = prev.filter((t) => t.slot !== nouveauRecord.slot)
-      return [...sansSlot, nouveauRecord].sort((a, b) => a.slot - b.slot)
-    })
+    setToilettesActives((prev) =>
+      [...prev.filter((t) => t.slot !== nouveau.slot), nouveau].sort(
+        (a, b) => a.slot - b.slot
+      )
+    )
 
     setSelection(e.id)
   }
@@ -518,9 +493,7 @@ export default function Page() {
       (t) => t.actif && t.eleve_id === e.id
     )
 
-    if (!record) {
-      return
-    }
+    if (!record) return
 
     const endedAt = new Date().toISOString()
     const dureeSecondes = Math.max(
@@ -549,7 +522,8 @@ export default function Page() {
 
   async function quitterGroupe() {
     await sauvegarderToutesPositions()
-    await closeActiveToilettesForGroup(groupeId)
+
+    await viderToilettesDuGroupe(groupeId)
 
     await supabase
       .from("eleves")
