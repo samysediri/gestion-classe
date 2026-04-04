@@ -1,8 +1,7 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
-import { supabase } from "../../../lib/supabase"
-import { useParams } from "next/navigation"
+import { useEffect, useMemo, useState } from "react"
+import { supabase } from "../../lib/supabase"
 
 type Eleve = {
   id: number
@@ -12,8 +11,6 @@ type Eleve = {
   regle_retenue: number
   regle_retrait: number
   groupe_id: number
-  position_x: number | null
-  position_y: number | null
 }
 
 type ToiletteRecord = {
@@ -29,93 +26,14 @@ type ToiletteRecord = {
   created_at: string
 }
 
-type UndoRow = {
-  id: number
-  niveau: number
-  regle_manquement: number
-  regle_retenue: number
-  regle_retrait: number
-}
-
-type UndoSnapshot = {
-  rows: UndoRow[]
-}
-
 type PhaseCours = "modelage" | "pratique_guidee" | "pratique_autonome"
 
-const GRID_COLS = 7
-const GRID_ROWS = 5
-const TEACHER_ZONE_RATIO = 0.12
-
-export default function Page() {
-  const params = useParams()
-  const groupeId = Number(params.id)
-
+export default function Ecran() {
   const [eleves, setEleves] = useState<Eleve[]>([])
-  const [selection, setSelection] = useState<number | null>(null)
-
-  const [editMode, setEditMode] = useState(false)
-  const [draggingId, setDraggingId] = useState<number | null>(null)
-
-  const [multiMode, setMultiMode] = useState(false)
-  const [multiSelection, setMultiSelection] = useState<number[]>([])
-  const [multiReadyForRule, setMultiReadyForRule] = useState(false)
-
-  const [retraitDirect, setRetraitDirect] = useState(false)
-  const [undoStack, setUndoStack] = useState<UndoSnapshot[]>([])
-
   const [toilettesActives, setToilettesActives] = useState<ToiletteRecord[]>([])
+  const [toilettesDernieres, setToilettesDernieres] = useState<ToiletteRecord[]>([])
   const [phaseCours, setPhaseCours] = useState<PhaseCours>("modelage")
-
-  const [boardSize, setBoardSize] = useState({ width: 320, height: 240 })
-
-  const boardRef = useRef<HTMLDivElement | null>(null)
-  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const selectedEleve = useMemo(
-    () => eleves.find((e) => e.id === selection) || null,
-    [eleves, selection]
-  )
-
-  const toiletteActiveSelection = useMemo(() => {
-    if (!selectedEleve) return null
-    return (
-      toilettesActives.find(
-        (t) => t.actif && t.eleve_id === selectedEleve.id
-      ) || null
-    )
-  }, [selectedEleve, toilettesActives])
-
-  const studentAreaPercent = 100 - TEACHER_ZONE_RATIO * 100
-
-  useEffect(() => {
-    function updateBoardSize() {
-      if (!boardRef.current) return
-      const rect = boardRef.current.getBoundingClientRect()
-      setBoardSize({
-        width: rect.width,
-        height: rect.height,
-      })
-    }
-
-    updateBoardSize()
-
-    const observer =
-      typeof ResizeObserver !== "undefined"
-        ? new ResizeObserver(() => updateBoardSize())
-        : null
-
-    if (boardRef.current && observer) {
-      observer.observe(boardRef.current)
-    }
-
-    window.addEventListener("resize", updateBoardSize)
-
-    return () => {
-      window.removeEventListener("resize", updateBoardSize)
-      observer?.disconnect()
-    }
-  }, [])
+  const [nowMs, setNowMs] = useState(Date.now())
 
   function normalizePhase(value: string | null | undefined): PhaseCours {
     if (value === "pratique_guidee") return "pratique_guidee"
@@ -123,871 +41,320 @@ export default function Page() {
     return "modelage"
   }
 
-  async function chargerPhaseCours() {
-    const { data, error } = await supabase
-      .from("config")
-      .select("phase_cours")
-      .eq("id", 1)
-      .single()
-
-    if (error) {
-      console.error("ERREUR PHASE:", error)
-      return
-    }
-
-    setPhaseCours(normalizePhase(data?.phase_cours))
-  }
-
-  async function choisirPhase(phase: PhaseCours) {
-    setPhaseCours(phase)
-
-    const { error } = await supabase
-      .from("config")
-      .update({ phase_cours: phase })
-      .eq("id", 1)
-
-    if (error) {
-      console.error("ERREUR UPDATE PHASE:", error)
-    }
-  }
-
-  async function viderToilettesDuGroupe(groupIdToClose: number) {
-    const { error } = await supabase
-      .from("toilettes")
-      .delete()
-      .eq("groupe_id", groupIdToClose)
-
-    if (error) {
-      console.error("ERREUR DELETE TOILETTES:", error)
-    }
-  }
-
-  async function entrerGroupe() {
-    const { data } = await supabase
+  async function charger() {
+    const { data: config, error: configError } = await supabase
       .from("config")
       .select("*")
       .eq("id", 1)
       .single()
 
-    if (data?.en_cours && data.groupe_actif !== groupeId) {
-      const confirmation = confirm(
-        "Un autre groupe est en cours. Voulez-vous le fermer pour utiliser celui-ci ?"
-      )
+    if (configError) {
+      console.error("ERREUR CONFIG:", configError)
+      setEleves([])
+      setToilettesActives([])
+      setToilettesDernieres([])
+      return
+    }
 
-      if (!confirmation) return false
+    if (!config || !config.groupe_actif) {
+      setEleves([])
+      setToilettesActives([])
+      setToilettesDernieres([])
+      setPhaseCours("modelage")
+      return
+    }
 
-      await supabase
+    setPhaseCours(normalizePhase(config.phase_cours))
+
+    const [
+      { data: elevesData, error: elevesError },
+      { data: toilettesActivesData, error: toilettesActivesError },
+      { data: toilettesHistData, error: toilettesHistError },
+    ] = await Promise.all([
+      supabase
         .from("eleves")
-        .update({
-          niveau: 0,
-          regle_manquement: 0,
-          regle_retenue: 0,
-          regle_retrait: 0,
-        })
-        .eq("groupe_id", data.groupe_actif)
+        .select("*")
+        .eq("groupe_id", config.groupe_actif)
+        .order("id", { ascending: true }),
 
-      await viderToilettesDuGroupe(data.groupe_actif)
-    }
+      supabase
+        .from("toilettes")
+        .select("*")
+        .eq("groupe_id", config.groupe_actif)
+        .eq("actif", true)
+        .order("slot", { ascending: true }),
 
-    await supabase
-      .from("config")
-      .update({
-        groupe_actif: groupeId,
-        en_cours: true,
-      })
-      .eq("id", 1)
-
-    return true
-  }
-
-  async function chargerEleves() {
-    const { data, error } = await supabase
-      .from("eleves")
-      .select("*")
-      .eq("groupe_id", groupeId)
-      .order("id")
-
-    if (error) {
-      console.error("ERREUR CHARGEMENT ELEVES:", error)
-      return
-    }
-
-    const rows = (data as Eleve[]) || []
-
-    const normalises = rows.map((e) => ({
-      ...e,
-      position_x: normaliserColonne(e.position_x),
-      position_y: normaliserRangee(e.position_y),
-    }))
-
-    setEleves(normalises)
-  }
-
-  async function chargerToilettesActives() {
-    const { data, error } = await supabase
-      .from("toilettes")
-      .select("*")
-      .eq("groupe_id", groupeId)
-      .eq("actif", true)
-      .order("slot", { ascending: true })
-
-    if (error) {
-      console.error("ERREUR CHARGEMENT TOILETTES:", error)
-      return
-    }
-
-    setToilettesActives((data as ToiletteRecord[]) || [])
-  }
-
-  async function chargerContexte() {
-    await Promise.all([
-      chargerEleves(),
-      chargerToilettesActives(),
-      chargerPhaseCours(),
+      supabase
+        .from("toilettes")
+        .select("*")
+        .eq("groupe_id", config.groupe_actif)
+        .eq("actif", false)
+        .order("ended_at", { ascending: false })
+        .limit(20),
     ])
+
+    if (elevesError) {
+      console.error("ERREUR CHARGEMENT ÉLÈVES:", elevesError)
+      setEleves([])
+    } else {
+      setEleves((elevesData as Eleve[]) || [])
+    }
+
+    if (toilettesActivesError) {
+      console.error("ERREUR TOILETTES ACTIVES:", toilettesActivesError)
+      setToilettesActives([])
+    } else {
+      setToilettesActives((toilettesActivesData as ToiletteRecord[]) || [])
+    }
+
+    if (toilettesHistError) {
+      console.error("ERREUR TOILETTES HIST:", toilettesHistError)
+      setToilettesDernieres([])
+    } else {
+      setToilettesDernieres((toilettesHistData as ToiletteRecord[]) || [])
+    }
   }
 
   useEffect(() => {
-    async function init() {
-      const ok = await entrerGroupe()
-      if (ok) {
-        await chargerContexte()
-      }
-    }
-    init()
-  }, [])
+    charger()
 
-  useEffect(() => {
     const interval = setInterval(() => {
-      chargerToilettesActives()
+      charger()
     }, 800)
 
-    return () => clearInterval(interval)
-  }, [groupeId])
+    const tick = setInterval(() => {
+      setNowMs(Date.now())
+    }, 1000)
 
-  function normaliserColonne(value: number | null) {
-    if (value === null || value === undefined) return 0
-    if (value >= 0 && value <= GRID_COLS - 1) return Math.round(value)
-    return 0
-  }
-
-  function normaliserRangee(value: number | null) {
-    if (value === null || value === undefined) return GRID_ROWS - 1
-    if (value >= 0 && value <= GRID_ROWS - 1) return Math.round(value)
-    return GRID_ROWS - 1
-  }
-
-  async function sauvegarderToutesPositions() {
-    for (const e of eleves) {
-      await supabase
-        .from("eleves")
-        .update({
-          position_x: normaliserColonne(e.position_x),
-          position_y: normaliserRangee(e.position_y),
-        })
-        .eq("id", e.id)
+    return () => {
+      clearInterval(interval)
+      clearInterval(tick)
     }
+  }, [])
+
+  const manquement = useMemo(
+    () =>
+      eleves
+        .filter((e) => (e.regle_manquement ?? 0) > 0)
+        .slice()
+        .reverse(),
+    [eleves]
+  )
+
+  const retenue = useMemo(
+    () =>
+      eleves
+        .filter((e) => (e.regle_retenue ?? 0) > 0)
+        .slice()
+        .reverse(),
+    [eleves]
+  )
+
+  const retrait = useMemo(
+    () =>
+      eleves
+        .filter((e) => (e.regle_retrait ?? 0) > 0)
+        .slice()
+        .reverse(),
+    [eleves]
+  )
+
+  function getTextSize(count: number) {
+    if (count <= 2) return "text-[clamp(2.6rem,5.2vw,5.4rem)]"
+    if (count <= 4) return "text-[clamp(2rem,4.2vw,4.3rem)]"
+    if (count <= 6) return "text-[clamp(1.6rem,3.2vw,3.2rem)]"
+    if (count <= 8) return "text-[clamp(1.25rem,2.5vw,2.5rem)]"
+    return "text-[clamp(1rem,1.8vw,1.8rem)]"
   }
 
-  function pushUndoSnapshot(rows: Eleve[]) {
-    const snapshot: UndoSnapshot = {
-      rows: rows.map((r) => ({
-        id: r.id,
-        niveau: r.niveau,
-        regle_manquement: r.regle_manquement,
-        regle_retenue: r.regle_retenue,
-        regle_retrait: r.regle_retrait,
-      })),
-    }
-
-    setUndoStack((prev) => [...prev, snapshot])
+  function getHeaderTextClass() {
+    return "text-[clamp(1.6rem,2.8vw,3.2rem)]"
   }
 
-  async function retourArriere() {
-    const last = undoStack[undoStack.length - 1]
-    if (!last) return
-
-    for (const row of last.rows) {
-      await supabase
-        .from("eleves")
-        .update({
-          niveau: row.niveau,
-          regle_manquement: row.regle_manquement,
-          regle_retenue: row.regle_retenue,
-          regle_retrait: row.regle_retrait,
-        })
-        .eq("id", row.id)
-    }
-
-    setEleves((prev) =>
-      prev.map((el) => {
-        const old = last.rows.find((r) => r.id === el.id)
-        return old ? { ...el, ...old } : el
-      })
-    )
-
-    setUndoStack((prev) => prev.slice(0, -1))
-    setSelection(null)
-    setMultiSelection([])
-    setMultiReadyForRule(false)
-    setRetraitDirect(false)
+  function getSpacingClass(count: number) {
+    if (count <= 3) return "gap-5"
+    if (count <= 6) return "gap-3"
+    if (count <= 9) return "gap-2"
+    return "gap-1.5"
   }
 
-  function buildUpdateNormal(e: Eleve, regle: number) {
-    let nouveau = e.niveau + 1
-    if (nouveau > 3) nouveau = 3
-
-    const update: Partial<Eleve> = { niveau: nouveau }
-
-    if (nouveau === 1) {
-      update.regle_manquement = regle
-    }
-
-    if (nouveau === 2) {
-      update.regle_retenue = regle
-    }
-
-    if (nouveau === 3) {
-      update.regle_retrait = regle
-    }
-
-    return update
-  }
-
-  function buildUpdateRetraitDirect(regle: number) {
-    return {
-      niveau: 3,
-      regle_manquement: 0,
-      regle_retenue: 0,
-      regle_retrait: regle,
-    }
-  }
-
-  async function appliquerRegle(e: Eleve, regle: number) {
-    pushUndoSnapshot([e])
-
-    const update = retraitDirect
-      ? buildUpdateRetraitDirect(regle)
-      : buildUpdateNormal(e, regle)
-
-    setEleves((prev) =>
-      prev.map((el) => (el.id === e.id ? { ...el, ...update } : el))
-    )
-
-    const { error } = await supabase
-      .from("eleves")
-      .update(update)
-      .eq("id", e.id)
-
-    if (error) {
-      console.error("ERREUR appliquerRegle:", error)
-    }
-
-    setSelection(null)
-    setRetraitDirect(false)
-  }
-
-  async function appliquerRegleMultiple(regle: number) {
-    const cibles = eleves.filter((e) => multiSelection.includes(e.id))
-    if (cibles.length === 0) return
-
-    pushUndoSnapshot(cibles)
-
-    const updates = cibles.map((e) => ({
-      id: e.id,
-      update: retraitDirect
-        ? buildUpdateRetraitDirect(regle)
-        : buildUpdateNormal(e, regle),
-    }))
-
-    setEleves((prev) =>
-      prev.map((el) => {
-        const match = updates.find((u) => u.id === el.id)
-        return match ? { ...el, ...match.update } : el
-      })
-    )
-
-    for (const item of updates) {
-      const { error } = await supabase
-        .from("eleves")
-        .update(item.update)
-        .eq("id", item.id)
-
-      if (error) {
-        console.error("ERREUR appliquerRegleMultiple:", error)
-      }
-    }
-
-    setMultiSelection([])
-    setMultiReadyForRule(false)
-    setSelection(null)
-    setRetraitDirect(false)
-  }
-
-  async function envoyerAuxToilettes(e: Eleve) {
-    const { data: actifsData, error: loadError } = await supabase
-      .from("toilettes")
-      .select("*")
-      .eq("groupe_id", groupeId)
-      .eq("actif", true)
-      .order("slot", { ascending: true })
-
-    if (loadError) {
-      console.error("ERREUR LOAD TOILETTES:", loadError)
-      alert("Erreur toilettes")
-      return
-    }
-
-    const actives = (actifsData as ToiletteRecord[]) || []
-
-    const dejaActif = actives.find((t) => t.eleve_id === e.id)
-    if (dejaActif) {
-      setToilettesActives(actives)
-      setSelection(e.id)
-      return
-    }
-
-    const slotLibre = [1, 2].find(
-      (slot) => !actives.some((t) => t.slot === slot)
-    )
-
-    if (!slotLibre) {
-      alert("Les deux toilettes sont déjà occupées.")
-      setToilettesActives(actives)
-      return
-    }
-
-    const { data: inserted, error } = await supabase
-      .from("toilettes")
-      .insert([
-        {
-          groupe_id: groupeId,
-          eleve_id: e.id,
-          eleve_nom: e.nom,
-          slot: slotLibre,
-          actif: true,
-        },
-      ])
-      .select()
-      .single()
-
-    if (error) {
-      console.error("ERREUR ENVOI TOILETTES:", error)
-      alert("Erreur envoi toilettes")
-      return
-    }
-
-    const nouveau = inserted as ToiletteRecord
-
-    setToilettesActives((prev) =>
-      [...prev.filter((t) => t.slot !== nouveau.slot), nouveau].sort(
-        (a, b) => a.slot - b.slot
-      )
-    )
-
-    setSelection(e.id)
-  }
-
-  async function retourDesToilettes(e: Eleve) {
-    const record = toilettesActives.find(
-      (t) => t.actif && t.eleve_id === e.id
-    )
-
-    if (!record) return
-
-    const endedAt = new Date().toISOString()
-    const dureeSecondes = Math.max(
-      0,
-      Math.round((Date.now() - new Date(record.started_at).getTime()) / 1000)
-    )
-
-    const { error } = await supabase
-      .from("toilettes")
-      .update({
-        actif: false,
-        ended_at: endedAt,
-        duree_secondes: dureeSecondes,
-      })
-      .eq("id", record.id)
-
-    if (error) {
-      console.error("ERREUR RETOUR TOILETTES:", error)
-      alert("Erreur retour toilettes")
-      return
-    }
-
-    setToilettesActives((prev) => prev.filter((t) => t.id !== record.id))
-    setSelection(e.id)
-  }
-
-  async function quitterGroupe() {
-    await sauvegarderToutesPositions()
-
-    await viderToilettesDuGroupe(groupeId)
-
-    await supabase
-      .from("eleves")
-      .update({
-        niveau: 0,
-        regle_manquement: 0,
-        regle_retenue: 0,
-        regle_retrait: 0,
-      })
-      .eq("groupe_id", groupeId)
-
-    await supabase
-      .from("config")
-      .update({
-        groupe_actif: null,
-        en_cours: false,
-        phase_cours: "modelage",
-      })
-      .eq("id", 1)
-
-    setSelection(null)
-    setEditMode(false)
-    setDraggingId(null)
-    setMultiMode(false)
-    setMultiSelection([])
-    setMultiReadyForRule(false)
-    setRetraitDirect(false)
-    setUndoStack([])
-    setToilettesActives([])
-    setPhaseCours("modelage")
-  }
-
-  function couleur(niveau: number) {
-    if (niveau === 0) return "bg-blue-500 text-black"
-    if (niveau === 1) return "bg-yellow-400 text-black"
-    if (niveau === 2) return "bg-orange-500 text-black"
-    return "bg-red-600 text-white"
-  }
-
-  function toggleMultiSelection(id: number) {
-    setMultiSelection((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    )
-  }
-
-  function annulerMulti() {
-    setMultiSelection([])
-    setMultiReadyForRule(false)
-    setSelection(null)
-  }
-
-  function startLongPress() {
-    if (multiMode) return
-
-    longPressTimer.current = setTimeout(() => {
-      setEditMode(true)
-      setSelection(null)
-    }, 500)
-  }
-
-  function cancelLongPress() {
-    if (longPressTimer.current) {
-      clearTimeout(longPressTimer.current)
-      longPressTimer.current = null
-    }
-  }
-
-  function clamp(value: number, min: number, max: number) {
-    return Math.max(min, Math.min(max, value))
-  }
-
-  function pointerToCell(clientX: number, clientY: number) {
-    if (!boardRef.current) {
-      return { col: 0, row: 0 }
-    }
-
-    const rect = boardRef.current.getBoundingClientRect()
-    const x = clientX - rect.left
-    const y = clientY - rect.top
-    const studentHeight = rect.height * (1 - TEACHER_ZONE_RATIO)
-
-    const col = clamp(
-      Math.floor(x / (rect.width / GRID_COLS)),
-      0,
-      GRID_COLS - 1
-    )
-
-    const row = clamp(
-      Math.floor(y / (studentHeight / GRID_ROWS)),
-      0,
-      GRID_ROWS - 1
-    )
-
-    return { col, row }
-  }
-
-  async function startDrag(clientX: number, clientY: number, eleveId: number) {
-    if (!editMode) return
-
-    setDraggingId(eleveId)
-
-    const { col, row } = pointerToCell(clientX, clientY)
-
-    setEleves((prev) =>
-      prev.map((e) =>
-        e.id === eleveId ? { ...e, position_x: col, position_y: row } : e
-      )
-    )
-  }
-
-  function moveDrag(clientX: number, clientY: number) {
-    if (!editMode || draggingId === null) return
-
-    const { col, row } = pointerToCell(clientX, clientY)
-
-    setEleves((prev) =>
-      prev.map((e) =>
-        e.id === draggingId ? { ...e, position_x: col, position_y: row } : e
-      )
-    )
-  }
-
-  async function endDrag() {
-    if (draggingId === null) return
-
-    const eleve = eleves.find((e) => e.id === draggingId)
-    if (eleve) {
-      await supabase
-        .from("eleves")
-        .update({
-          position_x: normaliserColonne(eleve.position_x),
-          position_y: normaliserRangee(eleve.position_y),
-        })
-        .eq("id", eleve.id)
-    }
-
-    setDraggingId(null)
-  }
-
-  const cellWidth = boardSize.width / GRID_COLS
-  const studentAreaHeightPx = boardSize.height * (1 - TEACHER_ZONE_RATIO)
-  const cellHeight = studentAreaHeightPx / GRID_ROWS
-
-  const bubbleWidth = Math.max(34, Math.min(46, cellWidth - 6))
-  const bubbleHeight = Math.max(24, Math.min(34, cellHeight - 6))
-  const bubbleFontSize = Math.max(9, Math.min(12, bubbleWidth * 0.23))
-
-  const showActionBar = !!selectedEleve && !multiMode
-
-  function phaseLabel(phase: PhaseCours) {
+  function getPhaseLabel(phase: PhaseCours) {
     if (phase === "pratique_guidee") return "Pratique guidée"
     if (phase === "pratique_autonome") return "Pratique autonome"
     return "Modelage"
   }
 
-  return (
-    <div className="min-h-screen bg-white px-3 py-3">
-      <div className="mx-auto w-full max-w-[430px]">
-        <h1 className="text-2xl font-bold mb-2">Groupe {groupeId}</h1>
+  function formatSeconds(totalSeconds: number) {
+    const safe = Math.max(0, totalSeconds)
+    const minutes = Math.floor(safe / 60)
+    const secondes = safe % 60
+    return `${String(minutes).padStart(2, "0")}:${String(secondes).padStart(2, "0")}`
+  }
 
-        <div className="flex flex-wrap gap-2 mb-2">
-          <button
-            onClick={quitterGroupe}
-            className="bg-red-700 text-white px-3 py-2 rounded-2xl text-sm"
-          >
-            QUITTER
-          </button>
+  function getDisplayDuration(record: ToiletteRecord | null) {
+    if (!record) return "00:00"
 
-          <button
-            onClick={retourArriere}
-            disabled={undoStack.length === 0}
-            className={`px-3 py-2 rounded-2xl text-sm ${
-              undoStack.length === 0
-                ? "bg-gray-400 text-white opacity-70"
-                : "bg-black text-white"
-            }`}
-          >
-            RETOUR
-          </button>
+    if (record.actif) {
+      const startedMs = new Date(record.started_at).getTime()
+      return formatSeconds(Math.max(0, Math.round((nowMs - startedMs) / 1000)))
+    }
 
-          <button
-            onClick={() => {
-              const next = !multiMode
-              setMultiMode(next)
-              setMultiSelection([])
-              setMultiReadyForRule(false)
-              setSelection(null)
-              setRetraitDirect(false)
-            }}
-            className={`px-3 py-2 rounded-2xl text-sm ${
-              multiMode ? "bg-purple-700 text-white" : "bg-gray-300 text-black"
-            }`}
-          >
-            MULTIPLE
-          </button>
+    return formatSeconds(record.duree_secondes ?? 0)
+  }
 
-          <button
-            onClick={() => {
-              setRetraitDirect(!retraitDirect)
-              setSelection(null)
-              setMultiReadyForRule(false)
-            }}
-            className={`px-3 py-2 rounded-2xl text-sm ${
-              retraitDirect ? "bg-red-800 text-white" : "bg-gray-300 text-black"
-            }`}
-          >
-            RETRAIT DIRECT
-          </button>
+  const toilettesParSlot = useMemo(() => {
+    return [1, 2].map((slot) => {
+      const active = toilettesActives.find((t) => t.slot === slot)
+      if (active) return active
 
-          {selectedEleve && toiletteActiveSelection && (
-            <button
-              onClick={() => retourDesToilettes(selectedEleve)}
-              className="bg-emerald-600 text-white px-3 py-2 rounded-2xl text-sm"
-            >
-              REVENU 🚽
-            </button>
-          )}
+      const finished = toilettesDernieres.find((t) => t.slot === slot)
+      if (finished) return finished
 
-          {multiMode && !multiReadyForRule && (
-            <button
-              onClick={() => {
-                if (multiSelection.length === 0) return
-                setMultiReadyForRule(true)
-                setSelection(null)
-              }}
-              disabled={multiSelection.length === 0}
-              className={`px-3 py-2 rounded-2xl text-sm ${
-                multiSelection.length === 0
-                  ? "bg-green-300 text-white opacity-70"
-                  : "bg-green-700 text-white"
-              }`}
-            >
-              OK ({multiSelection.length})
-            </button>
-          )}
+      return null
+    })
+  }, [toilettesActives, toilettesDernieres])
 
-          {multiMode && (
-            <button
-              onClick={annulerMulti}
-              className="bg-gray-500 text-white px-3 py-2 rounded-2xl text-sm"
-            >
-              ANNULER
-            </button>
-          )}
-        </div>
+  function renderColonne(
+    titre: string,
+    headerBg: string,
+    bodyBg: string,
+    items: Eleve[],
+    regleKey: "regle_manquement" | "regle_retenue" | "regle_retrait"
+  ) {
+    const textClass = getTextSize(items.length)
+    const spacingClass = getSpacingClass(items.length)
 
-        {showActionBar && (
-          <div className="flex items-center flex-wrap gap-2 mb-2 rounded-2xl bg-gray-100 px-3 py-2">
-            <div className="text-sm font-medium w-full">
-              {selectedEleve?.nom}
-            </div>
-
-            {[1, 2, 3, 4].map((r) => (
-              <button
-                key={r}
-                className="bg-black text-white px-3 py-1.5 rounded-xl text-sm"
-                onClick={() => {
-                  if (selectedEleve) {
-                    appliquerRegle(selectedEleve, r)
-                  }
-                }}
-              >
-                #{r}
-              </button>
-            ))}
-
-            <button
-              className="bg-sky-600 text-white px-3 py-1.5 rounded-xl text-lg"
-              onClick={() => {
-                if (selectedEleve) {
-                  envoyerAuxToilettes(selectedEleve)
-                }
-              }}
-              title="Envoyer aux toilettes"
-            >
-              🚽
-            </button>
-          </div>
-        )}
-
-        {multiMode && multiReadyForRule && (
-          <div className="flex items-center flex-wrap gap-2 mb-2 rounded-2xl bg-gray-100 px-3 py-2">
-            <div className="text-sm font-medium w-full">
-              {multiSelection.length} élève{multiSelection.length > 1 ? "s" : ""}
-            </div>
-
-            {[1, 2, 3, 4].map((r) => (
-              <button
-                key={r}
-                className="bg-black text-white px-3 py-1.5 rounded-xl text-sm"
-                onClick={() => appliquerRegleMultiple(r)}
-              >
-                #{r}
-              </button>
-            ))}
-          </div>
-        )}
-
+    return (
+      <div className={`flex-1 min-w-0 flex flex-col ${bodyBg} border-r-4 border-white last:border-r-0`}>
         <div
-          ref={boardRef}
-          className="relative w-full rounded-[28px] border-2 border-gray-700 bg-gray-100 overflow-hidden"
-          style={{
-            aspectRatio: "7 / 5.6",
-            touchAction: "none",
-          }}
-          onClick={() => {
-            setSelection(null)
-            if (draggingId === null) {
-              setEditMode(false)
-            }
-          }}
-          onMouseMove={(e) => moveDrag(e.clientX, e.clientY)}
-          onMouseUp={endDrag}
-          onMouseLeave={endDrag}
-          onTouchMove={(e) => {
-            const touch = e.touches[0]
-            if (touch) moveDrag(touch.clientX, touch.clientY)
-          }}
-          onTouchEnd={endDrag}
+          className={`w-full ${headerBg} text-white text-center font-bold py-[clamp(0.8rem,1.3vw,1.5rem)] ${getHeaderTextClass()} leading-none`}
         >
-          <div
-            className="absolute left-0 top-0 w-full"
-            style={{ height: `${studentAreaPercent}%` }}
-          >
-            <div className="grid h-full w-full grid-cols-7 grid-rows-5">
-              {Array.from({ length: GRID_COLS * GRID_ROWS }).map((_, i) => (
-                <div key={i} className="border border-gray-300" />
-              ))}
-            </div>
-          </div>
-
-          <div
-            className="absolute left-0 bottom-0 w-full flex items-center justify-center"
-            style={{ height: `${TEACHER_ZONE_RATIO * 100}%` }}
-          >
-            <div className="bg-slate-800 text-white text-xs px-4 py-2 rounded-2xl shadow">
-              Bureau du prof
-            </div>
-          </div>
-
-          {eleves.map((e) => {
-            const col = normaliserColonne(e.position_x)
-            const row = normaliserRangee(e.position_y)
-
-            const centerXPercent = ((col + 0.5) / GRID_COLS) * 100
-            const centerYPercent = ((row + 0.5) / GRID_ROWS) * studentAreaPercent
-
-            const isSelected = selection === e.id
-            const isMultiSelected = multiSelection.includes(e.id)
-
-            return (
-              <div
-                key={e.id}
-                className="absolute"
-                style={{
-                  left: `${centerXPercent}%`,
-                  top: `${centerYPercent}%`,
-                  transform: "translate(-50%, -50%)",
-                }}
-                onMouseDown={(ev) => {
-                  ev.stopPropagation()
-
-                  if (editMode) {
-                    startDrag(ev.clientX, ev.clientY, e.id)
-                  } else {
-                    startLongPress()
-                  }
-                }}
-                onMouseUp={cancelLongPress}
-                onTouchStart={(ev) => {
-                  ev.stopPropagation()
-
-                  const touch = ev.touches[0]
-                  if (!touch) return
-
-                  if (editMode) {
-                    startDrag(touch.clientX, touch.clientY, e.id)
-                  } else {
-                    startLongPress()
-                  }
-                }}
-                onTouchEnd={cancelLongPress}
-              >
-                <button
-                  className={[
-                    "rounded-2xl shadow-md font-medium leading-none text-center transition-all",
-                    couleur(e.niveau),
-                    editMode ? "ring-2 ring-black" : "",
-                    isSelected ? "ring-4 ring-black" : "",
-                    isMultiSelected ? "ring-4 ring-purple-600" : "",
-                  ].join(" ")}
-                  style={{
-                    width: `${bubbleWidth}px`,
-                    minHeight: `${bubbleHeight}px`,
-                    fontSize: `${bubbleFontSize}px`,
-                    padding: "3px 4px",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                  onClick={(ev) => {
-                    ev.stopPropagation()
-
-                    if (editMode) return
-
-                    if (multiMode) {
-                      toggleMultiSelection(e.id)
-                      return
-                    }
-
-                    setSelection(e.id)
-                  }}
-                >
-                  {e.nom}
-                </button>
-              </div>
-            )
-          })}
+          {titre}
         </div>
 
-        <div className="mt-3 rounded-2xl border border-gray-200 bg-white p-3">
-          <div className="text-xs font-semibold text-gray-500 mb-2">
-            Section du cours
-          </div>
-
-          <div className="grid grid-cols-3 gap-2">
-            {[
-              { value: "modelage", label: "Modelage" },
-              { value: "pratique_guidee", label: "Pratique guidée" },
-              { value: "pratique_autonome", label: "Pratique autonome" },
-            ].map((item) => (
-              <button
-                key={item.value}
-                onClick={() => choisirPhase(item.value as PhaseCours)}
-                className={`rounded-xl px-2 py-2 text-xs font-semibold ${
-                  phaseCours === item.value
-                    ? "bg-indigo-700 text-white"
-                    : "bg-gray-200 text-black"
-                }`}
+        <div className="flex-1 min-h-0 px-3 py-3 overflow-hidden">
+          <div className={`h-full w-full flex flex-col items-center justify-start ${spacingClass} overflow-hidden`}>
+            {items.map((e) => (
+              <div
+                key={`${titre}-${e.id}`}
+                className={`${textClass} font-bold text-gray-900 leading-[0.92] text-center max-w-full`}
+                style={{
+                  wordBreak: "break-word",
+                  overflowWrap: "anywhere",
+                }}
               >
-                {item.label}
-              </button>
+                {e.nom} #{e[regleKey]}
+              </div>
             ))}
           </div>
+        </div>
+      </div>
+    )
+  }
 
-          <div className="mt-2 text-xs text-gray-500">
-            En cours : {phaseLabel(phaseCours)}
-          </div>
+  function renderRedXOverlay() {
+    return (
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute left-1/2 top-1/2 w-[92%] h-[8px] bg-red-600 rounded-full -translate-x-1/2 -translate-y-1/2 rotate-45 shadow" />
+        <div className="absolute left-1/2 top-1/2 w-[92%] h-[8px] bg-red-600 rounded-full -translate-x-1/2 -translate-y-1/2 -rotate-45 shadow" />
+      </div>
+    )
+  }
+
+  function renderToiletteSlot(record: ToiletteRecord | null, slot: number) {
+    const isActive = !!record?.actif
+
+    return (
+      <div
+        key={slot}
+        className="relative flex items-center gap-4 rounded-2xl border-2 border-gray-300 bg-white px-5 py-3 min-w-[330px] max-w-[420px]"
+      >
+        <div className="relative flex items-center justify-center w-20 h-20 rounded-2xl bg-gray-100 shrink-0">
+          <div className="text-[3.6rem] leading-none">🚽</div>
+          {isActive && renderRedXOverlay()}
         </div>
 
-        {toilettesActives.length > 0 && (
-          <div className="mt-2 text-xs text-gray-600">
-            Toilettes en cours :{" "}
-            {toilettesActives
-              .map((t) => `${t.eleve_nom} (🚽${t.slot})`)
-              .join(" • ")}
-          </div>
-        )}
+        <div className="min-w-0 flex-1">
+          {record ? (
+            <>
+              <div className="font-bold text-[clamp(1.4rem,1.9vw,2rem)] truncate text-gray-900">
+                {record.eleve_nom}
+              </div>
+              <div
+                className={`${
+                  isActive ? "text-red-600" : "text-gray-700"
+                } font-bold text-[clamp(1.45rem,2vw,2.1rem)] leading-none mt-1`}
+              >
+                {getDisplayDuration(record)}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="font-semibold text-[clamp(1.25rem,1.6vw,1.8rem)] text-gray-400">
+                Libre
+              </div>
+              <div className="text-gray-300 font-bold text-[clamp(1.25rem,1.7vw,1.8rem)] leading-none mt-1">
+                00:00
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
 
-        {editMode && (
-          <div className="mt-2 text-xs text-gray-600">
-            Mode placement activé : glisse les élèves. Touche à l’extérieur pour quitter.
+  return (
+    <div className="w-screen h-screen bg-black flex items-center justify-center overflow-hidden">
+      <div
+        className="bg-gray-100 overflow-hidden"
+        style={{
+          width: "min(100vw, calc(100vh * 16 / 9))",
+          height: "min(100vh, calc(100vw * 9 / 16))",
+        }}
+      >
+        <div className="w-full h-full flex flex-col">
+          <div className="flex-1 min-h-0 flex">
+            {renderColonne(
+              "Manquement",
+              "bg-yellow-600",
+              "bg-yellow-300",
+              manquement,
+              "regle_manquement"
+            )}
+
+            {renderColonne(
+              "Retenue",
+              "bg-orange-600",
+              "bg-orange-200",
+              retenue,
+              "regle_retenue"
+            )}
+
+            {renderColonne(
+              "Retrait",
+              "bg-red-600",
+              "bg-red-200",
+              retrait,
+              "regle_retrait"
+            )}
           </div>
-        )}
+
+          <div className="h-[19%] w-full bg-white border-t-4 border-gray-200 px-5 py-3 flex items-center justify-between gap-5 overflow-hidden">
+            <div className="flex items-center gap-4 min-w-0">
+              {renderToiletteSlot(toilettesParSlot[0], 1)}
+              {renderToiletteSlot(toilettesParSlot[1], 2)}
+            </div>
+
+            <div className="shrink-0 rounded-2xl bg-indigo-50 border-2 border-indigo-200 px-6 py-4 text-center min-w-[280px]">
+              <div className="text-[clamp(1rem,1.2vw,1.2rem)] font-semibold text-indigo-500 uppercase tracking-wide">
+                Section du cours
+              </div>
+              <div className="font-bold text-[clamp(1.8rem,2vw,2.3rem)] text-indigo-900 mt-1">
+                {getPhaseLabel(phaseCours)}
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )
