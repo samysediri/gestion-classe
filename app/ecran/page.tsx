@@ -13,8 +13,32 @@ type Eleve = {
   groupe_id: number
 }
 
+type ToiletteRecord = {
+  id: number
+  groupe_id: number
+  eleve_id: number | null
+  eleve_nom: string
+  slot: number
+  started_at: string
+  ended_at: string | null
+  duree_secondes: number | null
+  actif: boolean
+  created_at: string
+}
+
+type PhaseCours = "modelage" | "pratique_guidee" | "pratique_autonome"
+
 export default function Ecran() {
   const [eleves, setEleves] = useState<Eleve[]>([])
+  const [toilettes, setToilettes] = useState<ToiletteRecord[]>([])
+  const [phaseCours, setPhaseCours] = useState<PhaseCours>("modelage")
+  const [nowMs, setNowMs] = useState(Date.now())
+
+  function normalizePhase(value: string | null | undefined): PhaseCours {
+    if (value === "pratique_guidee") return "pratique_guidee"
+    if (value === "pratique_autonome") return "pratique_autonome"
+    return "modelage"
+  }
 
   async function charger() {
     const { data: config, error: configError } = await supabase
@@ -26,38 +50,65 @@ export default function Ecran() {
     if (configError) {
       console.error("ERREUR CONFIG:", configError)
       setEleves([])
+      setToilettes([])
       return
     }
 
     if (!config || !config.groupe_actif) {
       setEleves([])
+      setToilettes([])
       return
     }
 
-    const { data, error } = await supabase
-      .from("eleves")
-      .select("*")
-      .eq("groupe_id", config.groupe_actif)
-      .order("id", { ascending: true })
+    setPhaseCours(normalizePhase(config.phase_cours))
 
-    if (error) {
-      console.error("ERREUR CHARGEMENT ÉLÈVES:", error)
+    const [{ data: elevesData, error: elevesError }, { data: toilettesData, error: toilettesError }] =
+      await Promise.all([
+        supabase
+          .from("eleves")
+          .select("*")
+          .eq("groupe_id", config.groupe_actif)
+          .order("id", { ascending: true }),
+        supabase
+          .from("toilettes")
+          .select("*")
+          .eq("groupe_id", config.groupe_actif)
+          .order("created_at", { ascending: false })
+          .limit(20),
+      ])
+
+    if (elevesError) {
+      console.error("ERREUR CHARGEMENT ÉLÈVES:", elevesError)
       setEleves([])
-      return
+    } else {
+      setEleves((elevesData as Eleve[]) || [])
     }
 
-    setEleves((data as Eleve[]) || [])
+    if (toilettesError) {
+      console.error("ERREUR CHARGEMENT TOILETTES:", toilettesError)
+      setToilettes([])
+    } else {
+      setToilettes((toilettesData as ToiletteRecord[]) || [])
+    }
   }
 
   useEffect(() => {
     charger()
-    const interval = setInterval(charger, 500)
-    return () => clearInterval(interval)
+
+    const interval = setInterval(() => {
+      charger()
+    }, 1500)
+
+    const tick = setInterval(() => {
+      setNowMs(Date.now())
+    }, 1000)
+
+    return () => {
+      clearInterval(interval)
+      clearInterval(tick)
+    }
   }, [])
 
-  // ✅ LOGIQUE CORRIGÉE
-  // L’élève reste dans toutes les colonnes déjà atteintes.
-  // Le retrait direct fonctionne automatiquement puisque les autres règles = 0.
   const manquement = useMemo(
     () =>
       eleves
@@ -85,30 +136,56 @@ export default function Ecran() {
     [eleves]
   )
 
-  function getCardTextClass(count: number) {
-    if (count <= 2) return "text-[clamp(2.8rem,5.2vw,5.5rem)]"
-    if (count <= 4) return "text-[clamp(2.2rem,4.2vw,4.6rem)]"
-    if (count <= 6) return "text-[clamp(1.8rem,3.5vw,3.8rem)]"
-    if (count <= 8) return "text-[clamp(1.4rem,2.8vw,3rem)]"
-    return "text-[clamp(1.1rem,2.1vw,2.2rem)]"
+  function getTextSize(count: number) {
+    if (count <= 2) return "text-[clamp(2.4rem,5vw,5rem)]"
+    if (count <= 4) return "text-[clamp(1.8rem,3.9vw,4rem)]"
+    if (count <= 6) return "text-[clamp(1.4rem,2.9vw,3rem)]"
+    if (count <= 8) return "text-[clamp(1.1rem,2.3vw,2.3rem)]"
+    return "text-[clamp(0.95rem,1.7vw,1.7rem)]"
   }
 
   function getHeaderTextClass() {
-    return "text-[clamp(1.4rem,2.4vw,3rem)]"
+    return "text-[clamp(1.2rem,2.4vw,2.8rem)]"
   }
 
-  function getItemSpacingClass(count: number) {
-    if (count <= 3) return "gap-6"
-    if (count <= 6) return "gap-4"
-    if (count <= 9) return "gap-3"
-    return "gap-2"
+  function getSpacingClass(count: number) {
+    if (count <= 3) return "gap-5"
+    if (count <= 6) return "gap-3"
+    if (count <= 9) return "gap-2"
+    return "gap-1.5"
   }
 
-  function getTopPaddingClass(count: number) {
-    if (count <= 3) return "pt-8"
-    if (count <= 6) return "pt-6"
-    return "pt-4"
+  function getPhaseLabel(phase: PhaseCours) {
+    if (phase === "pratique_guidee") return "Pratique guidée"
+    if (phase === "pratique_autonome") return "Pratique autonome"
+    return "Modelage"
   }
+
+  function formatSeconds(totalSeconds: number) {
+    const safe = Math.max(0, totalSeconds)
+    const minutes = Math.floor(safe / 60)
+    const secondes = safe % 60
+    return `${String(minutes).padStart(2, "0")}:${String(secondes).padStart(2, "0")}`
+  }
+
+  function getDisplayDuration(record: ToiletteRecord | null) {
+    if (!record) return ""
+    if (record.actif) {
+      const startedMs = new Date(record.started_at).getTime()
+      return formatSeconds(Math.max(0, Math.round((nowMs - startedMs) / 1000)))
+    }
+    return formatSeconds(record.duree_secondes ?? 0)
+  }
+
+  const toilettesParSlot = useMemo(() => {
+    return [1, 2].map((slot) => {
+      const active = toilettes.find((t) => t.slot === slot && t.actif)
+      if (active) return active
+
+      const finished = toilettes.find((t) => t.slot === slot && !t.actif)
+      return finished || null
+    })
+  }, [toilettes])
 
   function renderColonne(
     titre: string,
@@ -117,24 +194,23 @@ export default function Ecran() {
     items: Eleve[],
     regleKey: "regle_manquement" | "regle_retenue" | "regle_retrait"
   ) {
-    const textClass = getCardTextClass(items.length)
-    const spacingClass = getItemSpacingClass(items.length)
-    const topPaddingClass = getTopPaddingClass(items.length)
+    const textClass = getTextSize(items.length)
+    const spacingClass = getSpacingClass(items.length)
 
     return (
-      <div className={`flex-1 flex flex-col ${bodyBg} border-r-4 border-white last:border-r-0 min-w-0`}>
+      <div className={`flex-1 min-w-0 flex flex-col ${bodyBg} border-r-4 border-white last:border-r-0`}>
         <div
-          className={`w-full ${headerBg} text-white text-center font-bold py-4 ${getHeaderTextClass()} leading-none`}
+          className={`w-full ${headerBg} text-white text-center font-bold py-[clamp(0.7rem,1.2vw,1.4rem)] ${getHeaderTextClass()} leading-none`}
         >
           {titre}
         </div>
 
-        <div className={`flex-1 flex flex-col items-center ${topPaddingClass} px-3 pb-4 overflow-hidden`}>
-          <div className={`w-full flex flex-col items-center ${spacingClass} overflow-hidden`}>
+        <div className="flex-1 min-h-0 px-3 py-3 overflow-hidden">
+          <div className={`h-full w-full flex flex-col items-center justify-start ${spacingClass} overflow-hidden`}>
             {items.map((e) => (
               <div
                 key={`${titre}-${e.id}`}
-                className={`${textClass} font-bold text-gray-900 leading-[0.95] text-center max-w-full break-words`}
+                className={`${textClass} font-bold text-gray-900 leading-[0.92] text-center max-w-full`}
                 style={{
                   wordBreak: "break-word",
                   overflowWrap: "anywhere",
@@ -149,9 +225,46 @@ export default function Ecran() {
     )
   }
 
+  function renderToiletteSlot(record: ToiletteRecord | null, slot: number) {
+    const isActive = !!record?.actif
+
+    return (
+      <div
+        key={slot}
+        className="relative flex items-center gap-3 rounded-xl border border-gray-300 bg-white px-3 py-2 min-w-[230px] max-w-[320px]"
+      >
+        <div className="relative flex items-center justify-center w-12 h-12 rounded-lg bg-gray-100 text-3xl">
+          🚽
+          {isActive && (
+            <div className="absolute inset-0 flex items-center justify-center text-red-600 font-black text-4xl leading-none">
+              ✕
+            </div>
+          )}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          {record ? (
+            <>
+              <div className="font-bold text-[clamp(0.95rem,1.3vw,1.2rem)] truncate">
+                {record.eleve_nom}
+              </div>
+              <div className={`${isActive ? "text-red-600" : "text-gray-700"} font-bold text-[clamp(0.95rem,1.4vw,1.25rem)]`}>
+                {getDisplayDuration(record)}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="font-semibold text-gray-400">Libre</div>
+              <div className="text-gray-300 font-bold">00:00</div>
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="w-screen h-screen bg-black flex items-center justify-center overflow-hidden">
-      {/* ✅ Zone uniforme 16:9 sur tous les appareils */}
       <div
         className="bg-gray-100 overflow-hidden"
         style={{
@@ -159,30 +272,48 @@ export default function Ecran() {
           height: "min(100vh, calc(100vw * 9 / 16))",
         }}
       >
-        <div className="w-full h-full flex">
-          {renderColonne(
-            "Manquement",
-            "bg-yellow-600",
-            "bg-yellow-300",
-            manquement,
-            "regle_manquement"
-          )}
+        <div className="w-full h-full flex flex-col">
+          <div className="flex-1 min-h-0 flex">
+            {renderColonne(
+              "Manquement",
+              "bg-yellow-600",
+              "bg-yellow-300",
+              manquement,
+              "regle_manquement"
+            )}
 
-          {renderColonne(
-            "Retenue",
-            "bg-orange-600",
-            "bg-orange-200",
-            retenue,
-            "regle_retenue"
-          )}
+            {renderColonne(
+              "Retenue",
+              "bg-orange-600",
+              "bg-orange-200",
+              retenue,
+              "regle_retenue"
+            )}
 
-          {renderColonne(
-            "Retrait",
-            "bg-red-600",
-            "bg-red-200",
-            retrait,
-            "regle_retrait"
-          )}
+            {renderColonne(
+              "Retrait",
+              "bg-red-600",
+              "bg-red-200",
+              retrait,
+              "regle_retrait"
+            )}
+          </div>
+
+          <div className="h-[16%] w-full bg-white border-t-4 border-gray-200 px-4 py-3 flex items-center justify-between gap-4 overflow-hidden">
+            <div className="flex items-center gap-3 min-w-0">
+              {renderToiletteSlot(toilettesParSlot[0], 1)}
+              {renderToiletteSlot(toilettesParSlot[1], 2)}
+            </div>
+
+            <div className="shrink-0 rounded-xl bg-indigo-50 border border-indigo-200 px-4 py-3 text-center">
+              <div className="text-[clamp(0.7rem,0.9vw,0.9rem)] font-semibold text-indigo-500 uppercase tracking-wide">
+                Section du cours
+              </div>
+              <div className="font-bold text-[clamp(1rem,1.4vw,1.45rem)] text-indigo-900">
+                {getPhaseLabel(phaseCours)}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
