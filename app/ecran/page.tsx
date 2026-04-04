@@ -1,124 +1,190 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { supabase } from "../../lib/supabase"
 
-export default function Ecran(){
+type Eleve = {
+  id: number
+  nom: string
+  niveau: number
+  regle_manquement: number
+  regle_retenue: number
+  regle_retrait: number
+  groupe_id: number
+}
 
-  const [eleves,setEleves] = useState<any[]>([])
+export default function Ecran() {
+  const [eleves, setEleves] = useState<Eleve[]>([])
 
-  async function charger(){
-
-    const {data:config} = await supabase
+  async function charger() {
+    const { data: config, error: configError } = await supabase
       .from("config")
       .select("*")
-      .eq("id",1)
+      .eq("id", 1)
       .single()
 
-    // 🔥 aucun groupe actif → écran vide
-    if(!config || !config.groupe_actif){
+    if (configError) {
+      console.error("ERREUR CONFIG:", configError)
       setEleves([])
       return
     }
 
-    const {data} = await supabase
+    if (!config || !config.groupe_actif) {
+      setEleves([])
+      return
+    }
+
+    const { data, error } = await supabase
       .from("eleves")
       .select("*")
-      .eq("groupe_id",config.groupe_actif)
+      .eq("groupe_id", config.groupe_actif)
+      .order("id", { ascending: true })
 
-    setEleves(data || [])
+    if (error) {
+      console.error("ERREUR CHARGEMENT ÉLÈVES:", error)
+      setEleves([])
+      return
+    }
+
+    setEleves((data as Eleve[]) || [])
   }
 
-  useEffect(()=>{
+  useEffect(() => {
     charger()
-    const interval = setInterval(charger,500)
-    return ()=> clearInterval(interval)
-  },[])
+    const interval = setInterval(charger, 500)
+    return () => clearInterval(interval)
+  }, [])
 
-  // 🔥 taille texte dynamique
-  function getTextSize(count:number){
-    if(count <= 3) return "text-7xl"
-    if(count <= 5) return "text-6xl"
-    if(count <= 7) return "text-5xl"
-    return "text-4xl"
+  // ✅ LOGIQUE CORRIGÉE
+  // L’élève reste dans toutes les colonnes déjà atteintes.
+  // Le retrait direct fonctionne automatiquement puisque les autres règles = 0.
+  const manquement = useMemo(
+    () =>
+      eleves
+        .filter((e) => (e.regle_manquement ?? 0) > 0)
+        .slice()
+        .reverse(),
+    [eleves]
+  )
+
+  const retenue = useMemo(
+    () =>
+      eleves
+        .filter((e) => (e.regle_retenue ?? 0) > 0)
+        .slice()
+        .reverse(),
+    [eleves]
+  )
+
+  const retrait = useMemo(
+    () =>
+      eleves
+        .filter((e) => (e.regle_retrait ?? 0) > 0)
+        .slice()
+        .reverse(),
+    [eleves]
+  )
+
+  function getCardTextClass(count: number) {
+    if (count <= 2) return "text-[clamp(2.8rem,5.2vw,5.5rem)]"
+    if (count <= 4) return "text-[clamp(2.2rem,4.2vw,4.6rem)]"
+    if (count <= 6) return "text-[clamp(1.8rem,3.5vw,3.8rem)]"
+    if (count <= 8) return "text-[clamp(1.4rem,2.8vw,3rem)]"
+    return "text-[clamp(1.1rem,2.1vw,2.2rem)]"
   }
 
-  // 🔥 LOGIQUE CORRIGÉE
-  const manquement = eleves.filter(e => e.niveau === 1)
-  const retenue = eleves.filter(e => e.niveau === 2)
-  const retrait = eleves.filter(e => e.niveau === 3)
+  function getHeaderTextClass() {
+    return "text-[clamp(1.4rem,2.4vw,3rem)]"
+  }
 
-  return(
+  function getItemSpacingClass(count: number) {
+    if (count <= 3) return "gap-6"
+    if (count <= 6) return "gap-4"
+    if (count <= 9) return "gap-3"
+    return "gap-2"
+  }
 
-    <div className="w-screen h-screen flex bg-gray-100">
+  function getTopPaddingClass(count: number) {
+    if (count <= 3) return "pt-8"
+    if (count <= 6) return "pt-6"
+    return "pt-4"
+  }
 
-      {/* 🟡 MANQUEMENT */}
-      <div className="flex-1 flex flex-col bg-yellow-300 border-r-4 border-white">
+  function renderColonne(
+    titre: string,
+    headerBg: string,
+    bodyBg: string,
+    items: Eleve[],
+    regleKey: "regle_manquement" | "regle_retenue" | "regle_retrait"
+  ) {
+    const textClass = getCardTextClass(items.length)
+    const spacingClass = getItemSpacingClass(items.length)
+    const topPaddingClass = getTopPaddingClass(items.length)
 
-        <div className="w-full bg-yellow-600 text-white text-center text-5xl font-bold py-6">
-          Manquement
+    return (
+      <div className={`flex-1 flex flex-col ${bodyBg} border-r-4 border-white last:border-r-0 min-w-0`}>
+        <div
+          className={`w-full ${headerBg} text-white text-center font-bold py-4 ${getHeaderTextClass()} leading-none`}
+        >
+          {titre}
         </div>
 
-        <div className="flex-1 flex flex-col items-center justify-center">
-
-          {manquement.slice().reverse().map(e=>(
-            <div
-              key={e.id}
-              className={`${getTextSize(manquement.length)} mb-6 font-bold text-gray-900`}
-            >
-              {e.nom} #{e.regle_manquement}
-            </div>
-          ))}
-
+        <div className={`flex-1 flex flex-col items-center ${topPaddingClass} px-3 pb-4 overflow-hidden`}>
+          <div className={`w-full flex flex-col items-center ${spacingClass} overflow-hidden`}>
+            {items.map((e) => (
+              <div
+                key={`${titre}-${e.id}`}
+                className={`${textClass} font-bold text-gray-900 leading-[0.95] text-center max-w-full break-words`}
+                style={{
+                  wordBreak: "break-word",
+                  overflowWrap: "anywhere",
+                }}
+              >
+                {e.nom} #{e[regleKey]}
+              </div>
+            ))}
+          </div>
         </div>
-
       </div>
+    )
+  }
 
-      {/* 🟠 RETENUE */}
-      <div className="flex-1 flex flex-col bg-orange-300 border-r-4 border-white">
+  return (
+    <div className="w-screen h-screen bg-black flex items-center justify-center overflow-hidden">
+      {/* ✅ Zone uniforme 16:9 sur tous les appareils */}
+      <div
+        className="bg-gray-100 overflow-hidden"
+        style={{
+          width: "min(100vw, calc(100vh * 16 / 9))",
+          height: "min(100vh, calc(100vw * 9 / 16))",
+        }}
+      >
+        <div className="w-full h-full flex">
+          {renderColonne(
+            "Manquement",
+            "bg-yellow-600",
+            "bg-yellow-300",
+            manquement,
+            "regle_manquement"
+          )}
 
-        <div className="w-full bg-orange-600 text-white text-center text-5xl font-bold py-6">
-          Retenue
+          {renderColonne(
+            "Retenue",
+            "bg-orange-600",
+            "bg-orange-200",
+            retenue,
+            "regle_retenue"
+          )}
+
+          {renderColonne(
+            "Retrait",
+            "bg-red-600",
+            "bg-red-200",
+            retrait,
+            "regle_retrait"
+          )}
         </div>
-
-        <div className="flex-1 flex flex-col items-center justify-center">
-
-          {retenue.slice().reverse().map(e=>(
-            <div
-              key={e.id}
-              className={`${getTextSize(retenue.length)} mb-6 font-bold text-gray-900`}
-            >
-              {e.nom} #{e.regle_retenue}
-            </div>
-          ))}
-
-        </div>
-
       </div>
-
-      {/* 🔴 RETRAIT */}
-      <div className="flex-1 flex flex-col bg-red-300">
-
-        <div className="w-full bg-red-600 text-white text-center text-5xl font-bold py-6">
-          Retrait
-        </div>
-
-        <div className="flex-1 flex flex-col items-center justify-center">
-
-          {retrait.slice().reverse().map(e=>(
-            <div
-              key={e.id}
-              className={`${getTextSize(retrait.length)} mb-6 font-bold text-gray-900`}
-            >
-              {e.nom} #{e.regle_retrait}
-            </div>
-          ))}
-
-        </div>
-
-      </div>
-
     </div>
-
   )
 }
