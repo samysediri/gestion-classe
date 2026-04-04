@@ -30,7 +30,8 @@ type PhaseCours = "modelage" | "pratique_guidee" | "pratique_autonome"
 
 export default function Ecran() {
   const [eleves, setEleves] = useState<Eleve[]>([])
-  const [toilettes, setToilettes] = useState<ToiletteRecord[]>([])
+  const [toilettesActives, setToilettesActives] = useState<ToiletteRecord[]>([])
+  const [toilettesDernieres, setToilettesDernieres] = useState<ToiletteRecord[]>([])
   const [phaseCours, setPhaseCours] = useState<PhaseCours>("modelage")
   const [nowMs, setNowMs] = useState(Date.now())
 
@@ -50,13 +51,16 @@ export default function Ecran() {
     if (configError) {
       console.error("ERREUR CONFIG:", configError)
       setEleves([])
-      setToilettes([])
+      setToilettesActives([])
+      setToilettesDernieres([])
       return
     }
 
     if (!config || !config.groupe_actif) {
       setEleves([])
-      setToilettes([])
+      setToilettesActives([])
+      setToilettesDernieres([])
+      setPhaseCours("modelage")
       return
     }
 
@@ -64,18 +68,28 @@ export default function Ecran() {
 
     const [
       { data: elevesData, error: elevesError },
-      { data: toilettesData, error: toilettesError },
+      { data: toilettesActivesData, error: toilettesActivesError },
+      { data: toilettesHistData, error: toilettesHistError },
     ] = await Promise.all([
       supabase
         .from("eleves")
         .select("*")
         .eq("groupe_id", config.groupe_actif)
         .order("id", { ascending: true }),
+
       supabase
         .from("toilettes")
         .select("*")
         .eq("groupe_id", config.groupe_actif)
-        .order("created_at", { ascending: false })
+        .eq("actif", true)
+        .order("slot", { ascending: true }),
+
+      supabase
+        .from("toilettes")
+        .select("*")
+        .eq("groupe_id", config.groupe_actif)
+        .eq("actif", false)
+        .order("ended_at", { ascending: false })
         .limit(20),
     ])
 
@@ -86,11 +100,18 @@ export default function Ecran() {
       setEleves((elevesData as Eleve[]) || [])
     }
 
-    if (toilettesError) {
-      console.error("ERREUR CHARGEMENT TOILETTES:", toilettesError)
-      setToilettes([])
+    if (toilettesActivesError) {
+      console.error("ERREUR TOILETTES ACTIVES:", toilettesActivesError)
+      setToilettesActives([])
     } else {
-      setToilettes((toilettesData as ToiletteRecord[]) || [])
+      setToilettesActives((toilettesActivesData as ToiletteRecord[]) || [])
+    }
+
+    if (toilettesHistError) {
+      console.error("ERREUR TOILETTES HIST:", toilettesHistError)
+      setToilettesDernieres([])
+    } else {
+      setToilettesDernieres((toilettesHistData as ToiletteRecord[]) || [])
     }
   }
 
@@ -99,7 +120,7 @@ export default function Ecran() {
 
     const interval = setInterval(() => {
       charger()
-    }, 900)
+    }, 800)
 
     const tick = setInterval(() => {
       setNowMs(Date.now())
@@ -171,23 +192,27 @@ export default function Ecran() {
   }
 
   function getDisplayDuration(record: ToiletteRecord | null) {
-    if (!record) return ""
+    if (!record) return "00:00"
+
     if (record.actif) {
       const startedMs = new Date(record.started_at).getTime()
       return formatSeconds(Math.max(0, Math.round((nowMs - startedMs) / 1000)))
     }
+
     return formatSeconds(record.duree_secondes ?? 0)
   }
 
   const toilettesParSlot = useMemo(() => {
     return [1, 2].map((slot) => {
-      const active = toilettes.find((t) => t.slot === slot && t.actif)
+      const active = toilettesActives.find((t) => t.slot === slot)
       if (active) return active
 
-      const finished = toilettes.find((t) => t.slot === slot && !t.actif)
-      return finished || null
+      const finished = toilettesDernieres.find((t) => t.slot === slot)
+      if (finished) return finished
+
+      return null
     })
-  }, [toilettes])
+  }, [toilettesActives, toilettesDernieres])
 
   function renderColonne(
     titre: string,
@@ -227,6 +252,15 @@ export default function Ecran() {
     )
   }
 
+  function renderRedXOverlay() {
+    return (
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute left-1/2 top-1/2 w-[92%] h-[8px] bg-red-600 rounded-full -translate-x-1/2 -translate-y-1/2 rotate-45 shadow" />
+        <div className="absolute left-1/2 top-1/2 w-[92%] h-[8px] bg-red-600 rounded-full -translate-x-1/2 -translate-y-1/2 -rotate-45 shadow" />
+      </div>
+    )
+  }
+
   function renderToiletteSlot(record: ToiletteRecord | null, slot: number) {
     const isActive = !!record?.actif
 
@@ -235,13 +269,9 @@ export default function Ecran() {
         key={slot}
         className="relative flex items-center gap-4 rounded-2xl border-2 border-gray-300 bg-white px-5 py-3 min-w-[330px] max-w-[420px]"
       >
-        <div className="relative flex items-center justify-center w-20 h-20 rounded-2xl bg-gray-100 text-[3.5rem] shrink-0">
-          🚽
-          {isActive && (
-            <div className="absolute inset-0 flex items-center justify-center text-red-600 font-black text-[4.6rem] leading-none">
-              ✕
-            </div>
-          )}
+        <div className="relative flex items-center justify-center w-20 h-20 rounded-2xl bg-gray-100 shrink-0">
+          <div className="text-[3.6rem] leading-none">🚽</div>
+          {isActive && renderRedXOverlay()}
         </div>
 
         <div className="min-w-0 flex-1">
@@ -250,7 +280,11 @@ export default function Ecran() {
               <div className="font-bold text-[clamp(1.4rem,1.9vw,2rem)] truncate text-gray-900">
                 {record.eleve_nom}
               </div>
-              <div className={`${isActive ? "text-red-600" : "text-gray-700"} font-bold text-[clamp(1.45rem,2vw,2.1rem)] leading-none mt-1`}>
+              <div
+                className={`${
+                  isActive ? "text-red-600" : "text-gray-700"
+                } font-bold text-[clamp(1.45rem,2vw,2.1rem)] leading-none mt-1`}
+              >
                 {getDisplayDuration(record)}
               </div>
             </>
