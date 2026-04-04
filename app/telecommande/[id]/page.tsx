@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { supabase } from "../../../lib/supabase"
 import { useParams } from "next/navigation"
 
@@ -14,40 +14,81 @@ type Eleve = {
   groupe_id: number
   position_x: number | null
   position_y: number | null
-  tempX?: number
-  tempY?: number
+}
+
+type UndoRow = {
+  id: number
+  niveau: number
+  regle_manquement: number
+  regle_retenue: number
+  regle_retrait: number
 }
 
 type UndoSnapshot = {
-  rows: Array<{
-    id: number
-    niveau: number
-    regle_manquement: number
-    regle_retenue: number
-    regle_retrait: number
-  }>
+  rows: UndoRow[]
 }
 
+const GRID_COLS = 7
+const GRID_ROWS = 5
+const TEACHER_ZONE_RATIO = 0.12 // portion du bas réservée au bureau du prof
+
 export default function Page() {
+  const params = useParams()
+  const groupeId = Number(params.id)
+
   const [eleves, setEleves] = useState<Eleve[]>([])
   const [selection, setSelection] = useState<number | null>(null)
 
   const [editMode, setEditMode] = useState(false)
-  const [dragging, setDragging] = useState<Eleve | null>(null)
+  const [draggingId, setDraggingId] = useState<number | null>(null)
 
   const [multiMode, setMultiMode] = useState(false)
   const [multiSelection, setMultiSelection] = useState<number[]>([])
   const [multiReadyForRule, setMultiReadyForRule] = useState(false)
 
   const [retraitDirect, setRetraitDirect] = useState(false)
-
   const [undoStack, setUndoStack] = useState<UndoSnapshot[]>([])
 
-  const dragOffset = useRef({ x: 0, y: 0 })
-  const longPressTimer = useRef<any>(null)
+  const [boardSize, setBoardSize] = useState({ width: 320, height: 240 })
 
-  const params = useParams()
-  const groupeId = Number(params.id)
+  const boardRef = useRef<HTMLDivElement | null>(null)
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const selectedEleve = useMemo(
+    () => eleves.find((e) => e.id === selection) || null,
+    [eleves, selection]
+  )
+
+  const studentAreaPercent = 100 - TEACHER_ZONE_RATIO * 100
+
+  useEffect(() => {
+    function updateBoardSize() {
+      if (!boardRef.current) return
+      const rect = boardRef.current.getBoundingClientRect()
+      setBoardSize({
+        width: rect.width,
+        height: rect.height,
+      })
+    }
+
+    updateBoardSize()
+
+    const observer =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => updateBoardSize())
+        : null
+
+    if (boardRef.current && observer) {
+      observer.observe(boardRef.current)
+    }
+
+    window.addEventListener("resize", updateBoardSize)
+
+    return () => {
+      window.removeEventListener("resize", updateBoardSize)
+      observer?.disconnect()
+    }
+  }, [])
 
   async function entrerGroupe() {
     const { data } = await supabase
@@ -97,26 +138,38 @@ export default function Page() {
       return
     }
 
-    setEleves((data as Eleve[]) || [])
+    const rows = (data as Eleve[]) || []
+
+    // Si d’anciennes positions en pixels traînent encore, on les ramène dans la grille.
+    const normalises = rows.map((e) => ({
+      ...e,
+      position_x: normaliserColonne(e.position_x),
+      position_y: normaliserRangee(e.position_y),
+    }))
+
+    setEleves(normalises)
   }
 
-  async function updatePosition(id: number, x: number, y: number) {
-    await supabase
-      .from("eleves")
-      .update({ position_x: x, position_y: y })
-      .eq("id", id)
-  }
-
-  async function sauvegarderToutesPositions() {
-    for (const e of eleves) {
-      await supabase
-        .from("eleves")
-        .update({
-          position_x: e.tempX ?? e.position_x ?? 0,
-          position_y: e.tempY ?? e.position_y ?? 0,
-        })
-        .eq("id", e.id)
+  useEffect(() => {
+    async function init() {
+      const ok = await entrerGroupe()
+      if (ok) {
+        await chargerEleves()
+      }
     }
+    init()
+  }, [])
+
+  function normaliserColonne(value: number | null) {
+    if (value === null || value === undefined) return 0
+    if (value >= 0 && value <= GRID_COLS - 1) return Math.round(value)
+    return 0
+  }
+
+  function normaliserRangee(value: number | null) {
+    if (value === null || value === undefined) return GRID_ROWS - 1
+    if (value >= 0 && value <= GRID_ROWS - 1) return Math.round(value)
+    return GRID_ROWS - 1
   }
 
   function pushUndoSnapshot(rows: Eleve[]) {
@@ -196,34 +249,21 @@ export default function Page() {
   async function appliquerRegle(e: Eleve, regle: number) {
     pushUndoSnapshot([e])
 
-    const update = buildUpdateNormal(e, regle)
+    const update = retraitDirect
+      ? buildUpdateRetraitDirect(regle)
+      : buildUpdateNormal(e, regle)
 
     setEleves((prev) =>
       prev.map((el) => (el.id === e.id ? { ...el, ...update } : el))
     )
 
-    const { error } = await supabase.from("eleves").update(update).eq("id", e.id)
+    const { error } = await supabase
+      .from("eleves")
+      .update(update)
+      .eq("id", e.id)
 
     if (error) {
       console.error("ERREUR appliquerRegle:", error)
-    }
-
-    setSelection(null)
-  }
-
-  async function appliquerRetraitDirect(e: Eleve, regle: number) {
-    pushUndoSnapshot([e])
-
-    const update = buildUpdateRetraitDirect(regle)
-
-    setEleves((prev) =>
-      prev.map((el) => (el.id === e.id ? { ...el, ...update } : el))
-    )
-
-    const { error } = await supabase.from("eleves").update(update).eq("id", e.id)
-
-    if (error) {
-      console.error("ERREUR appliquerRetraitDirect:", error)
     }
 
     setSelection(null)
@@ -268,8 +308,6 @@ export default function Page() {
   }
 
   async function quitterGroupe() {
-    await sauvegarderToutesPositions()
-
     await supabase
       .from("eleves")
       .update({
@@ -290,6 +328,7 @@ export default function Page() {
 
     setSelection(null)
     setEditMode(false)
+    setDraggingId(null)
     setMultiMode(false)
     setMultiSelection([])
     setMultiReadyForRule(false)
@@ -297,77 +336,11 @@ export default function Page() {
     setUndoStack([])
   }
 
-  useEffect(() => {
-    async function init() {
-      const ok = await entrerGroupe()
-      if (ok) {
-        chargerEleves()
-      }
-    }
-    init()
-  }, [])
-
   function couleur(niveau: number) {
-    if (niveau === 0) return "bg-blue-500"
-    if (niveau === 1) return "bg-yellow-500 text-black"
+    if (niveau === 0) return "bg-blue-500 text-black"
+    if (niveau === 1) return "bg-yellow-400 text-black"
     if (niveau === 2) return "bg-orange-500 text-black"
-    return "bg-red-600"
-  }
-
-  function startLongPress() {
-    longPressTimer.current = setTimeout(() => {
-      setEditMode(true)
-      setSelection(null)
-    }, 600)
-  }
-
-  function cancelLongPress() {
-    clearTimeout(longPressTimer.current)
-  }
-
-  function startDrag(e: Eleve, clientX: number, clientY: number) {
-    const rect = document.getElementById("btn-" + e.id)?.getBoundingClientRect()
-    if (!rect) return
-
-    dragOffset.current = {
-      x: clientX - rect.left,
-      y: clientY - rect.top,
-    }
-
-    setDragging(e)
-  }
-
-  function handleMove(clientX: number, clientY: number, container: any) {
-    if (!dragging) return
-
-    const rect = container.getBoundingClientRect()
-
-    const x = clientX - rect.left - dragOffset.current.x
-    const y = clientY - rect.top - dragOffset.current.y
-
-    setEleves((prev) =>
-      prev.map((el) =>
-        el.id === dragging.id
-          ? { ...el, tempX: Math.max(0, x), tempY: Math.max(0, y) }
-          : el
-      )
-    )
-  }
-
-  function handleEnd() {
-    if (dragging) {
-      const el = eleves.find((e) => e.id === dragging.id)
-
-      if (el) {
-        updatePosition(
-          el.id,
-          el.tempX ?? el.position_x ?? 0,
-          el.tempY ?? el.position_y ?? 0
-        )
-      }
-
-      setDragging(null)
-    }
+    return "bg-red-600 text-white"
   }
 
   function toggleMultiSelection(id: number) {
@@ -381,202 +354,346 @@ export default function Page() {
     setMultiReadyForRule(false)
   }
 
+  function startLongPress() {
+    if (multiMode) return
+
+    longPressTimer.current = setTimeout(() => {
+      setEditMode(true)
+      setSelection(null)
+    }, 500)
+  }
+
+  function cancelLongPress() {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current)
+      longPressTimer.current = null
+    }
+  }
+
+  function clamp(value: number, min: number, max: number) {
+    return Math.max(min, Math.min(max, value))
+  }
+
+  function pointerToCell(clientX: number, clientY: number) {
+    if (!boardRef.current) {
+      return { col: 0, row: 0 }
+    }
+
+    const rect = boardRef.current.getBoundingClientRect()
+
+    const x = clientX - rect.left
+    const y = clientY - rect.top
+
+    const studentHeight = rect.height * (1 - TEACHER_ZONE_RATIO)
+
+    const col = clamp(
+      Math.floor(x / (rect.width / GRID_COLS)),
+      0,
+      GRID_COLS - 1
+    )
+
+    const row = clamp(
+      Math.floor(y / (studentHeight / GRID_ROWS)),
+      0,
+      GRID_ROWS - 1
+    )
+
+    return { col, row }
+  }
+
+  async function startDrag(clientX: number, clientY: number, eleveId: number) {
+    if (!editMode) return
+
+    setDraggingId(eleveId)
+
+    const { col, row } = pointerToCell(clientX, clientY)
+
+    setEleves((prev) =>
+      prev.map((e) =>
+        e.id === eleveId ? { ...e, position_x: col, position_y: row } : e
+      )
+    )
+  }
+
+  function moveDrag(clientX: number, clientY: number) {
+    if (!editMode || draggingId === null) return
+
+    const { col, row } = pointerToCell(clientX, clientY)
+
+    setEleves((prev) =>
+      prev.map((e) =>
+        e.id === draggingId ? { ...e, position_x: col, position_y: row } : e
+      )
+    )
+  }
+
+  async function endDrag() {
+    if (draggingId === null) return
+
+    const eleve = eleves.find((e) => e.id === draggingId)
+    if (eleve) {
+      await supabase
+        .from("eleves")
+        .update({
+          position_x: normaliserColonne(eleve.position_x),
+          position_y: normaliserRangee(eleve.position_y),
+        })
+        .eq("id", eleve.id)
+    }
+
+    setDraggingId(null)
+  }
+
+  const cellWidth = boardSize.width / GRID_COLS
+  const studentAreaHeightPx = boardSize.height * (1 - TEACHER_ZONE_RATIO)
+  const cellHeight = studentAreaHeightPx / GRID_ROWS
+
+  const bubbleWidth = Math.max(34, Math.min(46, cellWidth - 6))
+  const bubbleHeight = Math.max(24, Math.min(34, cellHeight - 6))
+  const bubbleFontSize = Math.max(9, Math.min(12, bubbleWidth * 0.23))
+
+  const showRuleBar = (!!selectedEleve && !multiMode) || multiReadyForRule
+
   return (
-    <div className="p-3 sm:p-4 h-screen overflow-hidden select-none bg-white">
-      <h1 className="text-xl sm:text-2xl font-semibold mb-3">Groupe {groupeId}</h1>
+    <div className="min-h-screen bg-white px-3 py-3">
+      <div className="mx-auto w-full max-w-[430px]">
+        <h1 className="text-2xl font-bold mb-2">Groupe {groupeId}</h1>
 
-      <div className="flex flex-wrap gap-2 mb-3">
-        <button
-          onClick={quitterGroupe}
-          className="bg-red-700 text-white px-3 py-2 rounded-xl text-sm"
-        >
-          QUITTER
-        </button>
+        <div className="flex flex-wrap gap-2 mb-2">
+          <button
+            onClick={quitterGroupe}
+            className="bg-red-700 text-white px-3 py-2 rounded-2xl text-sm"
+          >
+            QUITTER
+          </button>
 
-        <button
-          onClick={retourArriere}
-          className="bg-black text-white px-3 py-2 rounded-xl text-sm disabled:opacity-40"
-          disabled={undoStack.length === 0}
-        >
-          RETOUR
-        </button>
+          <button
+            onClick={retourArriere}
+            disabled={undoStack.length === 0}
+            className={`px-3 py-2 rounded-2xl text-sm ${
+              undoStack.length === 0
+                ? "bg-gray-400 text-white opacity-70"
+                : "bg-black text-white"
+            }`}
+          >
+            RETOUR
+          </button>
 
-        <button
-          onClick={() => {
-            const next = !multiMode
-            setMultiMode(next)
-            setMultiSelection([])
-            setMultiReadyForRule(false)
-            setSelection(null)
-          }}
-          className={`px-3 py-2 rounded-xl text-sm ${
-            multiMode ? "bg-purple-700 text-white" : "bg-gray-300"
-          }`}
-        >
-          MULTIPLE
-        </button>
-
-        <button
-          onClick={() => {
-            setRetraitDirect(!retraitDirect)
-            setSelection(null)
-          }}
-          className={`px-3 py-2 rounded-xl text-sm ${
-            retraitDirect ? "bg-red-800 text-white" : "bg-gray-300"
-          }`}
-        >
-          RETRAIT DIRECT
-        </button>
-
-        {multiMode && !multiReadyForRule && (
           <button
             onClick={() => {
-              if (multiSelection.length === 0) return
-              setMultiReadyForRule(true)
+              const next = !multiMode
+              setMultiMode(next)
+              setMultiSelection([])
+              setMultiReadyForRule(false)
               setSelection(null)
+              setRetraitDirect(false)
             }}
-            className="bg-green-700 text-white px-3 py-2 rounded-xl text-sm disabled:opacity-40"
-            disabled={multiSelection.length === 0}
+            className={`px-3 py-2 rounded-2xl text-sm ${
+              multiMode ? "bg-purple-700 text-white" : "bg-gray-300 text-black"
+            }`}
           >
-            OK ({multiSelection.length})
+            MULTIPLE
           </button>
-        )}
 
-        {multiMode && (
           <button
-            onClick={annulerMulti}
-            className="bg-gray-500 text-white px-3 py-2 rounded-xl text-sm"
+            onClick={() => {
+              setRetraitDirect(!retraitDirect)
+              setSelection(null)
+              setMultiReadyForRule(false)
+            }}
+            className={`px-3 py-2 rounded-2xl text-sm ${
+              retraitDirect ? "bg-red-800 text-white" : "bg-gray-300 text-black"
+            }`}
           >
-            ANNULER MULTI
+            RETRAIT DIRECT
           </button>
-        )}
-      </div>
 
-      {multiMode && multiReadyForRule && (
-        <div className="flex flex-wrap gap-2 mb-3 items-center">
-          <div className="text-sm font-medium mr-2">
-            Règle pour {multiSelection.length} élève{multiSelection.length > 1 ? "s" : ""}
-          </div>
-
-          {[1, 2, 3, 4].map((r) => (
+          {multiMode && !multiReadyForRule && (
             <button
-              key={r}
-              className="bg-black text-white px-3 py-2 rounded-lg text-sm"
-              onClick={() => appliquerRegleMultiple(r)}
+              onClick={() => {
+                if (multiSelection.length === 0) return
+                setMultiReadyForRule(true)
+                setSelection(null)
+              }}
+              disabled={multiSelection.length === 0}
+              className={`px-3 py-2 rounded-2xl text-sm ${
+                multiSelection.length === 0
+                  ? "bg-green-300 text-white opacity-70"
+                  : "bg-green-700 text-white"
+              }`}
             >
-              #{r}
+              OK ({multiSelection.length})
             </button>
-          ))}
-        </div>
-      )}
+          )}
 
-      <div
-        className="relative w-full h-[78vh] bg-gray-100 border rounded-2xl overflow-hidden"
-        style={{ touchAction: "none" }}
-        onClick={() => {
-          setSelection(null)
-          if (!dragging) setEditMode(false)
-        }}
-        onMouseMove={(e) => handleMove(e.clientX, e.clientY, e.currentTarget)}
-        onMouseUp={handleEnd}
-        onTouchMove={(e) => {
-          const touch = e.touches[0]
-          handleMove(touch.clientX, touch.clientY, e.currentTarget)
-        }}
-        onTouchEnd={handleEnd}
-      >
-        <div className="absolute inset-0 pointer-events-none opacity-20">
-          <div className="grid grid-cols-7 grid-rows-5 w-full h-full">
-            {Array.from({ length: 35 }).map((_, i) => (
-              <div key={i} className="border border-gray-300" />
-            ))}
-          </div>
-        </div>
-
-        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-gray-800 text-white text-xs px-4 py-2 rounded-xl shadow">
-          Bureau du prof
-        </div>
-
-        {eleves.map((e) => {
-          const x = e.tempX ?? e.position_x ?? 0
-          const y = e.tempY ?? e.position_y ?? 0
-
-          const isSelected = selection === e.id
-          const isMultiSelected = multiSelection.includes(e.id)
-
-          return (
-            <div
-              key={e.id}
-              style={{ position: "absolute", left: x, top: y }}
-              onMouseDown={(ev) => {
-                if (editMode) {
-                  startDrag(e, ev.clientX, ev.clientY)
-                } else {
-                  startLongPress()
-                }
-              }}
-              onTouchStart={(ev) => {
-                const touch = ev.touches[0]
-                if (editMode) {
-                  startDrag(e, touch.clientX, touch.clientY)
-                } else {
-                  startLongPress()
-                }
-              }}
-              onMouseUp={cancelLongPress}
-              onTouchEnd={cancelLongPress}
+          {multiMode && (
+            <button
+              onClick={annulerMulti}
+              className="bg-gray-500 text-white px-3 py-2 rounded-2xl text-sm"
             >
+              ANNULER
+            </button>
+          )}
+        </div>
+
+        {showRuleBar && (
+          <div className="flex items-center flex-wrap gap-2 mb-2 rounded-2xl bg-gray-100 px-3 py-2">
+            <div className="text-sm font-medium">
+              {multiReadyForRule
+                ? `${multiSelection.length} élève${
+                    multiSelection.length > 1 ? "s" : ""
+                  }`
+                : selectedEleve?.nom}
+            </div>
+
+            {[1, 2, 3, 4].map((r) => (
               <button
-                id={"btn-" + e.id}
-                className={[
-                  couleur(e.niveau),
-                  "rounded-xl shadow-sm text-[11px] sm:text-xs leading-tight",
-                  "px-2 py-2 min-w-[58px] max-w-[78px]",
-                  "whitespace-normal break-words text-center",
-                  editMode ? "animate-pulse" : "",
-                  isMultiSelected ? "ring-4 ring-purple-500" : "",
-                  isSelected ? "ring-4 ring-black" : "",
-                ].join(" ")}
-                onClick={(ev) => {
-                  ev.stopPropagation()
-
-                  if (editMode) return
-
-                  if (multiMode) {
-                    toggleMultiSelection(e.id)
-                    return
+                key={r}
+                className="bg-black text-white px-3 py-1.5 rounded-xl text-sm"
+                onClick={() => {
+                  if (multiReadyForRule) {
+                    appliquerRegleMultiple(r)
+                  } else if (selectedEleve) {
+                    appliquerRegle(selectedEleve, r)
                   }
-
-                  setSelection(e.id)
                 }}
               >
-                {e.nom}
+                #{r}
               </button>
+            ))}
+          </div>
+        )}
 
-              {selection === e.id && !editMode && !multiMode && (
-                <div className="flex gap-1 mt-1 flex-wrap max-w-[110px]">
-                  {[1, 2, 3, 4].map((r) => (
-                    <button
-                      key={r}
-                      className="bg-black text-white px-2 py-1 rounded-lg text-xs"
-                      onClick={(ev) => {
-                        ev.stopPropagation()
-
-                        if (retraitDirect) {
-                          appliquerRetraitDirect(e, r)
-                        } else {
-                          appliquerRegle(e, r)
-                        }
-                      }}
-                    >
-                      #{r}
-                    </button>
-                  ))}
-                </div>
-              )}
+        <div
+          ref={boardRef}
+          className="relative w-full rounded-[28px] border-2 border-gray-700 bg-gray-100 overflow-hidden"
+          style={{
+            aspectRatio: "7 / 5.6",
+            touchAction: "none",
+          }}
+          onClick={() => {
+            setSelection(null)
+            if (draggingId === null) {
+              setEditMode(false)
+            }
+          }}
+          onMouseMove={(e) => moveDrag(e.clientX, e.clientY)}
+          onMouseUp={endDrag}
+          onMouseLeave={endDrag}
+          onTouchMove={(e) => {
+            const touch = e.touches[0]
+            if (touch) moveDrag(touch.clientX, touch.clientY)
+          }}
+          onTouchEnd={endDrag}
+        >
+          {/* zone bureaux élèves */}
+          <div
+            className="absolute left-0 top-0 w-full"
+            style={{ height: `${studentAreaPercent}%` }}
+          >
+            <div className="grid h-full w-full grid-cols-7 grid-rows-5">
+              {Array.from({ length: GRID_COLS * GRID_ROWS }).map((_, i) => (
+                <div key={i} className="border border-gray-300" />
+              ))}
             </div>
-          )
-        })}
+          </div>
+
+          {/* bureau du prof, zone stable et cohérente */}
+          <div
+            className="absolute left-0 bottom-0 w-full flex items-center justify-center"
+            style={{ height: `${TEACHER_ZONE_RATIO * 100}%` }}
+          >
+            <div className="bg-slate-800 text-white text-xs px-4 py-2 rounded-2xl shadow">
+              Bureau du prof
+            </div>
+          </div>
+
+          {eleves.map((e) => {
+            const col = normaliserColonne(e.position_x)
+            const row = normaliserRangee(e.position_y)
+
+            const centerXPercent = ((col + 0.5) / GRID_COLS) * 100
+            const centerYPercent = ((row + 0.5) / GRID_ROWS) * studentAreaPercent
+
+            const isSelected = selection === e.id
+            const isMultiSelected = multiSelection.includes(e.id)
+
+            return (
+              <div
+                key={e.id}
+                className="absolute"
+                style={{
+                  left: `${centerXPercent}%`,
+                  top: `${centerYPercent}%`,
+                  transform: "translate(-50%, -50%)",
+                }}
+                onMouseDown={(ev) => {
+                  ev.stopPropagation()
+
+                  if (editMode) {
+                    startDrag(ev.clientX, ev.clientY, e.id)
+                  } else {
+                    startLongPress()
+                  }
+                }}
+                onMouseUp={cancelLongPress}
+                onTouchStart={(ev) => {
+                  ev.stopPropagation()
+
+                  const touch = ev.touches[0]
+                  if (!touch) return
+
+                  if (editMode) {
+                    startDrag(touch.clientX, touch.clientY, e.id)
+                  } else {
+                    startLongPress()
+                  }
+                }}
+                onTouchEnd={cancelLongPress}
+              >
+                <button
+                  className={[
+                    "rounded-2xl shadow-md font-medium leading-none text-center",
+                    "transition-all",
+                    couleur(e.niveau),
+                    editMode ? "ring-2 ring-black" : "",
+                    isSelected ? "ring-4 ring-black" : "",
+                    isMultiSelected ? "ring-4 ring-purple-600" : "",
+                  ].join(" ")}
+                  style={{
+                    width: `${bubbleWidth}px`,
+                    minHeight: `${bubbleHeight}px`,
+                    fontSize: `${bubbleFontSize}px`,
+                    padding: "3px 4px",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                  onClick={(ev) => {
+                    ev.stopPropagation()
+
+                    if (editMode) return
+
+                    if (multiMode) {
+                      toggleMultiSelection(e.id)
+                      return
+                    }
+
+                    setSelection(e.id)
+                  }}
+                >
+                  {e.nom}
+                </button>
+              </div>
+            )
+          })}
+        </div>
+
+        {editMode && (
+          <div className="mt-2 text-xs text-gray-600">
+            Mode placement activé : glisse les élèves. Touche à l’extérieur pour quitter.
+          </div>
+        )}
       </div>
     </div>
   )
