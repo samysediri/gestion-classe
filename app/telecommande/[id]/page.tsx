@@ -66,6 +66,7 @@ export default function Page() {
 
   const [toilettesActives, setToilettesActives] = useState<ToiletteRecord[]>([])
   const [phaseCours, setPhaseCours] = useState<PhaseCours>("modelage")
+  const [sessionId, setSessionId] = useState<number | null>(null)
 
   const [boardSize, setBoardSize] = useState({ width: 320, height: 240 })
 
@@ -162,12 +163,120 @@ export default function Page() {
     }
   }
 
+  async function ouvrirOuRecupererSession() {
+    const { data: existing, error: existingError } = await supabase
+      .from("sessions_cours")
+      .select("id")
+      .eq("groupe_id", groupeId)
+      .eq("actif", true)
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (existingError) {
+      console.error("ERREUR SESSION EXISTANTE:", existingError)
+      return null
+    }
+
+    if (existing?.id) {
+      setSessionId(existing.id)
+      return existing.id as number
+    }
+
+    const { data: created, error: createError } = await supabase
+      .from("sessions_cours")
+      .insert([
+        {
+          groupe_id: groupeId,
+          phase_depart: phaseCours,
+          actif: true,
+        },
+      ])
+      .select("id")
+      .single()
+
+    if (createError) {
+      console.error("ERREUR OUVERTURE SESSION:", createError)
+      return null
+    }
+
+    if (!created?.id) return null
+
+    setSessionId(created.id)
+    return created.id as number
+  }
+
+  async function loggerAction(params: {
+    sessionIdOverride?: number | null
+    eleve_id: number
+    eleve_nom: string
+    action_type:
+      | "manquement"
+      | "retenue"
+      | "retrait"
+      | "retrait_direct"
+      | "toilettes_depart"
+      | "toilettes_retour"
+    regle?: number | null
+    niveau_avant?: number | null
+    niveau_apres?: number | null
+  }) {
+    const activeSessionId = params.sessionIdOverride ?? sessionId
+
+    if (!activeSessionId) {
+      console.warn("LOGGER ACTION: aucune session active")
+      return
+    }
+
+    const { error } = await supabase.from("ecarts_conduite_log").insert([
+      {
+        session_id: activeSessionId,
+        groupe_id: groupeId,
+        eleve_id: params.eleve_id,
+        eleve_nom: params.eleve_nom,
+        action_type: params.action_type,
+        regle: params.regle ?? null,
+        niveau_avant: params.niveau_avant ?? null,
+        niveau_apres: params.niveau_apres ?? null,
+        phase_cours: phaseCours,
+      },
+    ])
+
+    if (error) {
+      console.error("ERREUR LOG ACTION:", error)
+    }
+  }
+
+  async function fermerSession() {
+    if (!sessionId) return
+
+    const { error } = await supabase
+      .from("sessions_cours")
+      .update({
+        ended_at: new Date().toISOString(),
+        phase_fin: phaseCours,
+        actif: false,
+      })
+      .eq("id", sessionId)
+
+    if (error) {
+      console.error("ERREUR FERMETURE SESSION:", error)
+    }
+
+    setSessionId(null)
+  }
+
   async function entrerGroupe() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("config")
       .select("*")
       .eq("id", 1)
       .single()
+
+    if (error) {
+      console.error("ERREUR CONFIG ENTRER GROUPE:", error)
+      return false
+    }
 
     if (data?.en_cours && data.groupe_actif !== groupeId) {
       const confirmation = confirm(
@@ -187,6 +296,16 @@ export default function Page() {
         .eq("groupe_id", data.groupe_actif)
 
       await viderToilettesDuGroupe(data.groupe_actif)
+
+      await supabase
+        .from("sessions_cours")
+        .update({
+          ended_at: new Date().toISOString(),
+          phase_fin: phaseCours,
+          actif: false,
+        })
+        .eq("groupe_id", data.groupe_actif)
+        .eq("actif", true)
     }
 
     await supabase
@@ -196,6 +315,8 @@ export default function Page() {
         en_cours: true,
       })
       .eq("id", 1)
+
+    await ouvrirOuRecupererSession()
 
     return true
   }
@@ -249,6 +370,7 @@ export default function Page() {
 
   useEffect(() => {
     async function init() {
+      await chargerPhaseCours()
       const ok = await entrerGroupe()
       if (ok) {
         await chargerContexte()
@@ -355,12 +477,31 @@ export default function Page() {
     }
   }
 
+  function getActionType(params: {
+    retraitDirectActif: boolean
+    niveauAvant: number
+    niveauApres: number
+  }) {
+    if (params.retraitDirectActif) return "retrait_direct" as const
+    if (params.niveauApres === 1) return "manquement" as const
+    if (params.niveauApres === 2) return "retenue" as const
+    return "retrait" as const
+  }
+
   async function appliquerRegle(e: Eleve, regle: number) {
     pushUndoSnapshot([e])
 
+    const niveauAvant = e.niveau
     const update = retraitDirect
       ? buildUpdateRetraitDirect(regle)
       : buildUpdateNormal(e, regle)
+
+    const niveauApres = update.niveau ?? e.niveau
+    const actionType = getActionType({
+      retraitDirectActif: retraitDirect,
+      niveauAvant,
+      niveauApres,
+    })
 
     setEleves((prev) =>
       prev.map((el) => (el.id === e.id ? { ...el, ...update } : el))
@@ -373,28 +514,50 @@ export default function Page() {
 
     if (error) {
       console.error("ERREUR appliquerRegle:", error)
+    } else {
+      await loggerAction({
+        eleve_id: e.id,
+        eleve_nom: e.nom,
+        action_type: actionType,
+        regle,
+        niveau_avant: niveauAvant,
+        niveau_apres: niveauApres,
+      })
     }
 
     setSelection(null)
     setRetraitDirect(false)
-  }
-
-  async function appliquerRegleMultiple(regle: number) {
+  }  async function appliquerRegleMultiple(regle: number) {
     const cibles = eleves.filter((e) => multiSelection.includes(e.id))
     if (cibles.length === 0) return
 
     pushUndoSnapshot(cibles)
 
-    const updates = cibles.map((e) => ({
-      id: e.id,
-      update: retraitDirect
+    const updates = cibles.map((e) => {
+      const update = retraitDirect
         ? buildUpdateRetraitDirect(regle)
-        : buildUpdateNormal(e, regle),
-    }))
+        : buildUpdateNormal(e, regle)
+
+      const niveauAvant = e.niveau
+      const niveauApres = update.niveau ?? e.niveau
+      const actionType = getActionType({
+        retraitDirectActif: retraitDirect,
+        niveauAvant,
+        niveauApres,
+      })
+
+      return {
+        eleve: e,
+        update,
+        niveauAvant,
+        niveauApres,
+        actionType,
+      }
+    })
 
     setEleves((prev) =>
       prev.map((el) => {
-        const match = updates.find((u) => u.id === el.id)
+        const match = updates.find((u) => u.eleve.id === el.id)
         return match ? { ...el, ...match.update } : el
       })
     )
@@ -403,10 +566,19 @@ export default function Page() {
       const { error } = await supabase
         .from("eleves")
         .update(item.update)
-        .eq("id", item.id)
+        .eq("id", item.eleve.id)
 
       if (error) {
         console.error("ERREUR appliquerRegleMultiple:", error)
+      } else {
+        await loggerAction({
+          eleve_id: item.eleve.id,
+          eleve_nom: item.eleve.nom,
+          action_type: item.actionType,
+          regle,
+          niveau_avant: item.niveauAvant,
+          niveau_apres: item.niveauApres,
+        })
       }
     }
 
@@ -451,7 +623,9 @@ export default function Page() {
     }
 
     if (!slotChoisi) {
-      alert("Les deux emplacements toilettes sont déjà utilisés pour cette période. Clique sur QUITTER pour repartir à neuf.")
+      alert(
+        "Les deux emplacements toilettes sont déjà utilisés pour cette période. Clique sur QUITTER pour repartir à neuf."
+      )
       await chargerToilettesActives()
       return
     }
@@ -471,6 +645,14 @@ export default function Page() {
       alert("Erreur envoi toilettes")
       return
     }
+
+    await loggerAction({
+      eleve_id: e.id,
+      eleve_nom: e.nom,
+      action_type: "toilettes_depart",
+      niveau_avant: e.niveau,
+      niveau_apres: e.niveau,
+    })
 
     await chargerToilettesActives()
     setSelection(e.id)
@@ -504,11 +686,47 @@ export default function Page() {
       return
     }
 
+    await loggerAction({
+      eleve_id: e.id,
+      eleve_nom: e.nom,
+      action_type: "toilettes_retour",
+      niveau_avant: e.niveau,
+      niveau_apres: e.niveau,
+    })
+
     await chargerToilettesActives()
     setSelection(e.id)
   }
 
   async function quitterGroupe() {
+    for (const e of eleves) {
+      if (
+        e.regle_manquement > 0 ||
+        e.regle_retenue > 0 ||
+        e.regle_retrait > 0 ||
+        e.niveau > 0
+      ) {
+        await loggerAction({
+          eleve_id: e.id,
+          eleve_nom: e.nom,
+          action_type:
+            e.regle_retrait > 0
+              ? "retrait"
+              : e.regle_retenue > 0
+              ? "retenue"
+              : "manquement",
+          regle:
+            e.regle_retrait > 0
+              ? e.regle_retrait
+              : e.regle_retenue > 0
+              ? e.regle_retenue
+              : e.regle_manquement,
+          niveau_avant: e.niveau,
+          niveau_apres: e.niveau,
+        })
+      }
+    }
+
     await sauvegarderToutesPositions()
     await viderToilettesDuGroupe(groupeId)
 
@@ -530,6 +748,8 @@ export default function Page() {
         phase_cours: "modelage",
       })
       .eq("id", 1)
+
+    await fermerSession()
 
     setSelection(null)
     setEditMode(false)
@@ -975,3 +1195,5 @@ export default function Page() {
     </div>
   )
 }
+
+  
