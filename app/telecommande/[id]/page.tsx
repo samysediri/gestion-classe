@@ -8,19 +8,44 @@ type Eleve = {
   id: number
   nom: string
   niveau: number
+  regle_manquement: number
+  regle_retenue: number
+  regle_retrait: number
   groupe_id: number
   position_x: number | null
   position_y: number | null
 }
 
+type ToiletteRecord = {
+  id: number
+  groupe_id: number
+  eleve_id: number | null
+  eleve_nom: string
+  slot: number
+  started_at: string
+  ended_at: string | null
+  duree_secondes: number | null
+  actif: boolean
+  created_at: string
+}
+
 type UndoRow = {
   id: number
   niveau: number
+  regle_manquement: number
+  regle_retenue: number
+  regle_retrait: number
 }
 
 type UndoSnapshot = {
   rows: UndoRow[]
 }
+
+type PhaseCours = "modelage" | "pratique_guidee" | "pratique_autonome"
+
+const GRID_COLS = 7
+const GRID_ROWS = 5
+const TEACHER_ZONE_RATIO = 0.12
 
 export default function Page() {
   const params = useParams()
@@ -29,35 +54,253 @@ export default function Page() {
   const [eleves, setEleves] = useState<Eleve[]>([])
   const [selection, setSelection] = useState<number | null>(null)
 
+  const [editMode, setEditMode] = useState(false)
+  const [draggingId, setDraggingId] = useState<number | null>(null)
+
   const [multiMode, setMultiMode] = useState(false)
   const [multiSelection, setMultiSelection] = useState<number[]>([])
+  const [multiReadyForRule, setMultiReadyForRule] = useState(false)
+
+  const [retraitDirect, setRetraitDirect] = useState(false)
   const [undoStack, setUndoStack] = useState<UndoSnapshot[]>([])
+
+  const [toilettesActives, setToilettesActives] = useState<ToiletteRecord[]>([])
+  const [phaseCours, setPhaseCours] = useState<PhaseCours>("modelage")
+
+  const [boardSize, setBoardSize] = useState({ width: 320, height: 240 })
+
+  const boardRef = useRef<HTMLDivElement | null>(null)
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const selectedEleve = useMemo(
     () => eleves.find((e) => e.id === selection) || null,
     [eleves, selection]
   )
 
-  async function chargerEleves() {
+  const toiletteActiveSelection = useMemo(() => {
+    if (!selectedEleve) return null
+    return (
+      toilettesActives.find(
+        (t) => t.actif && t.eleve_id === selectedEleve.id
+      ) || null
+    )
+  }, [selectedEleve, toilettesActives])
+
+  const studentAreaPercent = 100 - TEACHER_ZONE_RATIO * 100
+
+  useEffect(() => {
+    function updateBoardSize() {
+      if (!boardRef.current) return
+      const rect = boardRef.current.getBoundingClientRect()
+      setBoardSize({
+        width: rect.width,
+        height: rect.height,
+      })
+    }
+
+    updateBoardSize()
+
+    const observer =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => updateBoardSize())
+        : null
+
+    if (boardRef.current && observer) {
+      observer.observe(boardRef.current)
+    }
+
+    window.addEventListener("resize", updateBoardSize)
+
+    return () => {
+      window.removeEventListener("resize", updateBoardSize)
+      observer?.disconnect()
+    }
+  }, [])
+
+  function normalizePhase(value: string | null | undefined): PhaseCours {
+    if (value === "pratique_guidee") return "pratique_guidee"
+    if (value === "pratique_autonome") return "pratique_autonome"
+    return "modelage"
+  }
+
+  async function chargerPhaseCours() {
+    const { data, error } = await supabase
+      .from("config")
+      .select("phase_cours")
+      .eq("id", 1)
+      .single()
+
+    if (error) {
+      console.error("ERREUR PHASE:", error)
+      return
+    }
+
+    setPhaseCours(normalizePhase(data?.phase_cours))
+  }
+
+  async function choisirPhase(phase: PhaseCours) {
+    setPhaseCours(phase)
+
+    const { error } = await supabase
+      .from("config")
+      .update({ phase_cours: phase })
+      .eq("id", 1)
+
+    if (error) {
+      console.error("ERREUR UPDATE PHASE:", error)
+    }
+  }
+
+  async function viderToilettesDuGroupe(groupIdToClose: number) {
+    const { error } = await supabase
+      .from("toilettes")
+      .delete()
+      .eq("groupe_id", groupIdToClose)
+
+    if (error) {
+      console.error("ERREUR DELETE TOILETTES:", error)
+    }
+  }
+
+  async function entrerGroupe() {
     const { data } = await supabase
+      .from("config")
+      .select("*")
+      .eq("id", 1)
+      .single()
+
+    if (data?.en_cours && data.groupe_actif !== groupeId) {
+      const confirmation = confirm(
+        "Un autre groupe est en cours. Voulez-vous le fermer pour utiliser celui-ci ?"
+      )
+
+      if (!confirmation) return false
+
+      await supabase
+        .from("eleves")
+        .update({
+          niveau: 0,
+          regle_manquement: 0,
+          regle_retenue: 0,
+          regle_retrait: 0,
+        })
+        .eq("groupe_id", data.groupe_actif)
+
+      await viderToilettesDuGroupe(data.groupe_actif)
+    }
+
+    await supabase
+      .from("config")
+      .update({
+        groupe_actif: groupeId,
+        en_cours: true,
+      })
+      .eq("id", 1)
+
+    return true
+  }
+
+  async function chargerEleves() {
+    const { data, error } = await supabase
       .from("eleves")
       .select("*")
       .eq("groupe_id", groupeId)
+      .order("id")
 
-    setEleves((data ?? []) as Eleve[])
+    if (error) {
+      console.error("ERREUR CHARGEMENT ELEVES:", error)
+      return
+    }
+
+    const rows = (data as Eleve[]) || []
+
+    const normalises = rows.map((e) => ({
+      ...e,
+      position_x: normaliserColonne(e.position_x),
+      position_y: normaliserRangee(e.position_y),
+    }))
+
+    setEleves(normalises)
+  }
+
+  async function chargerToilettesActives() {
+    const { data, error } = await supabase
+      .from("toilettes")
+      .select("*")
+      .eq("groupe_id", groupeId)
+      .eq("actif", true)
+      .order("slot", { ascending: true })
+
+    if (error) {
+      console.error("ERREUR CHARGEMENT TOILETTES:", error)
+      return
+    }
+
+    setToilettesActives((data as ToiletteRecord[]) || [])
+  }
+
+  async function chargerContexte() {
+    await Promise.all([
+      chargerEleves(),
+      chargerToilettesActives(),
+      chargerPhaseCours(),
+    ])
   }
 
   useEffect(() => {
-    chargerEleves()
-    const interval = setInterval(chargerEleves, 800)
-    return () => clearInterval(interval)
+    async function init() {
+      const ok = await entrerGroupe()
+      if (ok) {
+        await chargerContexte()
+      }
+    }
+    init()
   }, [])
 
-  function pushUndo(rows: Eleve[]) {
-    setUndoStack((prev) => [
-      ...prev,
-      { rows: rows.map((r) => ({ id: r.id, niveau: r.niveau })) },
-    ])
+  useEffect(() => {
+    const interval = setInterval(() => {
+      chargerToilettesActives()
+    }, 800)
+
+    return () => clearInterval(interval)
+  }, [groupeId])
+
+  function normaliserColonne(value: number | null) {
+    if (value === null || value === undefined) return 0
+    if (value >= 0 && value <= GRID_COLS - 1) return Math.round(value)
+    return 0
+  }
+
+  function normaliserRangee(value: number | null) {
+    if (value === null || value === undefined) return GRID_ROWS - 1
+    if (value >= 0 && value <= GRID_ROWS - 1) return Math.round(value)
+    return GRID_ROWS - 1
+  }
+
+  async function sauvegarderToutesPositions() {
+    for (const e of eleves) {
+      await supabase
+        .from("eleves")
+        .update({
+          position_x: normaliserColonne(e.position_x),
+          position_y: normaliserRangee(e.position_y),
+        })
+        .eq("id", e.id)
+    }
+  }
+
+  function pushUndoSnapshot(rows: Eleve[]) {
+    const snapshot: UndoSnapshot = {
+      rows: rows.map((r) => ({
+        id: r.id,
+        niveau: r.niveau,
+        regle_manquement: r.regle_manquement,
+        regle_retenue: r.regle_retenue,
+        regle_retrait: r.regle_retrait,
+      })),
+    }
+
+    setUndoStack((prev) => [...prev, snapshot])
   }
 
   async function retourArriere() {
@@ -67,110 +310,667 @@ export default function Page() {
     for (const row of last.rows) {
       await supabase
         .from("eleves")
-        .update({ niveau: row.niveau })
+        .update({
+          niveau: row.niveau,
+          regle_manquement: row.regle_manquement,
+          regle_retenue: row.regle_retenue,
+          regle_retrait: row.regle_retrait,
+        })
         .eq("id", row.id)
     }
 
+    setEleves((prev) =>
+      prev.map((el) => {
+        const old = last.rows.find((r) => r.id === el.id)
+        return old ? { ...el, ...old } : el
+      })
+    )
+
     setUndoStack((prev) => prev.slice(0, -1))
-    chargerEleves()
+    setSelection(null)
+    setMultiSelection([])
+    setMultiReadyForRule(false)
+    setRetraitDirect(false)
   }
 
-  async function setStatut(e: Eleve, niveau: number) {
-    pushUndo([e])
+  function buildUpdateNormal(e: Eleve, regle: number) {
+    let nouveau = e.niveau + 1
+    if (nouveau > 3) nouveau = 3
 
-    await supabase
+    const update: Partial<Eleve> = { niveau: nouveau }
+
+    if (nouveau === 1) update.regle_manquement = regle
+    if (nouveau === 2) update.regle_retenue = regle
+    if (nouveau === 3) update.regle_retrait = regle
+
+    return update
+  }
+
+  function buildUpdateRetraitDirect(regle: number) {
+    return {
+      niveau: 3,
+      regle_manquement: 0,
+      regle_retenue: 0,
+      regle_retrait: regle,
+    }
+  }
+
+  async function appliquerRegle(e: Eleve, regle: number) {
+    pushUndoSnapshot([e])
+
+    const update = retraitDirect
+      ? buildUpdateRetraitDirect(regle)
+      : buildUpdateNormal(e, regle)
+
+    setEleves((prev) =>
+      prev.map((el) => (el.id === e.id ? { ...el, ...update } : el))
+    )
+
+    const { error } = await supabase
       .from("eleves")
-      .update({ niveau })
+      .update(update)
       .eq("id", e.id)
 
+    if (error) {
+      console.error("ERREUR appliquerRegle:", error)
+    }
+
     setSelection(null)
-    chargerEleves()
+    setRetraitDirect(false)
   }
 
-  async function setStatutMultiple(niveau: number) {
+  async function appliquerRegleMultiple(regle: number) {
     const cibles = eleves.filter((e) => multiSelection.includes(e.id))
     if (cibles.length === 0) return
 
-    pushUndo(cibles)
+    pushUndoSnapshot(cibles)
 
-    for (const e of cibles) {
-      await supabase
+    const updates = cibles.map((e) => ({
+      id: e.id,
+      update: retraitDirect
+        ? buildUpdateRetraitDirect(regle)
+        : buildUpdateNormal(e, regle),
+    }))
+
+    setEleves((prev) =>
+      prev.map((el) => {
+        const match = updates.find((u) => u.id === el.id)
+        return match ? { ...el, ...match.update } : el
+      })
+    )
+
+    for (const item of updates) {
+      const { error } = await supabase
         .from("eleves")
-        .update({ niveau })
-        .eq("id", e.id)
+        .update(item.update)
+        .eq("id", item.id)
+
+      if (error) {
+        console.error("ERREUR appliquerRegleMultiple:", error)
+      }
     }
 
     setMultiSelection([])
-    chargerEleves()
+    setMultiReadyForRule(false)
+    setSelection(null)
+    setRetraitDirect(false)
   }
 
-  function toggleMulti(id: number) {
+  async function envoyerAuxToilettes(e: Eleve) {
+    const { data: allRows, error: loadError } = await supabase
+      .from("toilettes")
+      .select("*")
+      .eq("groupe_id", groupeId)
+      .order("created_at", { ascending: true })
+
+    if (loadError) {
+      console.error("ERREUR LOAD TOILETTES:", loadError)
+      alert("Erreur toilettes")
+      return
+    }
+
+    const toutes = (allRows as ToiletteRecord[]) || []
+
+    const dejaActif = toutes.find((t) => t.actif && t.eleve_id === e.id)
+    if (dejaActif) {
+      await chargerToilettesActives()
+      setSelection(e.id)
+      return
+    }
+
+    const slotsDejaUtilises = new Set(toutes.map((t) => t.slot))
+    let slotChoisi: number | undefined = [1, 2].find(
+      (slot) => !slotsDejaUtilises.has(slot)
+    )
+
+    if (!slotChoisi) {
+      const actives = toutes.filter((t) => t.actif)
+      slotChoisi = [1, 2].find(
+        (slot) => !actives.some((t) => t.slot === slot)
+      )
+    }
+
+    if (!slotChoisi) {
+      alert("Les deux emplacements toilettes sont déjà utilisés pour cette période. Clique sur QUITTER pour repartir à neuf.")
+      await chargerToilettesActives()
+      return
+    }
+
+    const { error } = await supabase.from("toilettes").insert([
+      {
+        groupe_id: groupeId,
+        eleve_id: e.id,
+        eleve_nom: e.nom,
+        slot: slotChoisi,
+        actif: true,
+      },
+    ])
+
+    if (error) {
+      console.error("ERREUR ENVOI TOILETTES:", error)
+      alert("Erreur envoi toilettes")
+      return
+    }
+
+    await chargerToilettesActives()
+    setSelection(e.id)
+  }
+
+  async function retourDesToilettes(e: Eleve) {
+    const record = toilettesActives.find(
+      (t) => t.actif && t.eleve_id === e.id
+    )
+
+    if (!record) return
+
+    const endedAt = new Date().toISOString()
+    const dureeSecondes = Math.max(
+      0,
+      Math.round((Date.now() - new Date(record.started_at).getTime()) / 1000)
+    )
+
+    const { error } = await supabase
+      .from("toilettes")
+      .update({
+        actif: false,
+        ended_at: endedAt,
+        duree_secondes: dureeSecondes,
+      })
+      .eq("id", record.id)
+
+    if (error) {
+      console.error("ERREUR RETOUR TOILETTES:", error)
+      alert("Erreur retour toilettes")
+      return
+    }
+
+    await chargerToilettesActives()
+    setSelection(e.id)
+  }
+
+  async function quitterGroupe() {
+    await sauvegarderToutesPositions()
+    await viderToilettesDuGroupe(groupeId)
+
+    await supabase
+      .from("eleves")
+      .update({
+        niveau: 0,
+        regle_manquement: 0,
+        regle_retenue: 0,
+        regle_retrait: 0,
+      })
+      .eq("groupe_id", groupeId)
+
+    await supabase
+      .from("config")
+      .update({
+        groupe_actif: null,
+        en_cours: false,
+        phase_cours: "modelage",
+      })
+      .eq("id", 1)
+
+    setSelection(null)
+    setEditMode(false)
+    setDraggingId(null)
+    setMultiMode(false)
+    setMultiSelection([])
+    setMultiReadyForRule(false)
+    setRetraitDirect(false)
+    setUndoStack([])
+    setToilettesActives([])
+    setPhaseCours("modelage")
+  }
+
+  function couleur(niveau: number) {
+    if (niveau === 0) return "bg-blue-500 text-black"
+    if (niveau === 1) return "bg-yellow-400 text-black"
+    if (niveau === 2) return "bg-orange-500 text-black"
+    return "bg-red-600 text-white"
+  }
+
+  function toggleMultiSelection(id: number) {
     setMultiSelection((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     )
   }
 
-  function couleur(niveau: number) {
-    if (niveau === 0) return "bg-green-500"
-    if (niveau === 1) return "bg-yellow-400"
-    if (niveau === 2) return "bg-orange-500"
-    return "bg-red-600"
+  function annulerMulti() {
+    setMultiSelection([])
+    setMultiReadyForRule(false)
+    setSelection(null)
+  }
+
+  function startLongPress() {
+    if (multiMode) return
+
+    longPressTimer.current = setTimeout(() => {
+      setEditMode(true)
+      setSelection(null)
+    }, 500)
+  }
+
+  function cancelLongPress() {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current)
+      longPressTimer.current = null
+    }
+  }
+
+  function clamp(value: number, min: number, max: number) {
+    return Math.max(min, Math.min(max, value))
+  }
+
+  function pointerToCell(clientX: number, clientY: number) {
+    if (!boardRef.current) {
+      return { col: 0, row: 0 }
+    }
+
+    const rect = boardRef.current.getBoundingClientRect()
+    const x = clientX - rect.left
+    const y = clientY - rect.top
+    const studentHeight = rect.height * (1 - TEACHER_ZONE_RATIO)
+
+    const col = clamp(
+      Math.floor(x / (rect.width / GRID_COLS)),
+      0,
+      GRID_COLS - 1
+    )
+
+    const row = clamp(
+      Math.floor(y / (studentHeight / GRID_ROWS)),
+      0,
+      GRID_ROWS - 1
+    )
+
+    return { col, row }
+  }
+
+  async function startDrag(clientX: number, clientY: number, eleveId: number) {
+    if (!editMode) return
+
+    setDraggingId(eleveId)
+
+    const { col, row } = pointerToCell(clientX, clientY)
+
+    setEleves((prev) =>
+      prev.map((e) =>
+        e.id === eleveId ? { ...e, position_x: col, position_y: row } : e
+      )
+    )
+  }
+
+  function moveDrag(clientX: number, clientY: number) {
+    if (!editMode || draggingId === null) return
+
+    const { col, row } = pointerToCell(clientX, clientY)
+
+    setEleves((prev) =>
+      prev.map((e) =>
+        e.id === draggingId ? { ...e, position_x: col, position_y: row } : e
+      )
+    )
+  }
+
+  async function endDrag() {
+    if (draggingId === null) return
+
+    const eleve = eleves.find((e) => e.id === draggingId)
+    if (eleve) {
+      await supabase
+        .from("eleves")
+        .update({
+          position_x: normaliserColonne(eleve.position_x),
+          position_y: normaliserRangee(eleve.position_y),
+        })
+        .eq("id", eleve.id)
+    }
+
+    setDraggingId(null)
+  }
+
+  const cellWidth = boardSize.width / GRID_COLS
+  const studentAreaHeightPx = boardSize.height * (1 - TEACHER_ZONE_RATIO)
+  const cellHeight = studentAreaHeightPx / GRID_ROWS
+
+  const bubbleWidth = Math.max(34, Math.min(46, cellWidth - 6))
+  const bubbleHeight = Math.max(24, Math.min(34, cellHeight - 6))
+  const bubbleFontSize = Math.max(9, Math.min(12, bubbleWidth * 0.23))
+
+  const showActionBar = !!selectedEleve && !multiMode
+
+  function phaseLabel(phase: PhaseCours) {
+    if (phase === "pratique_guidee") return "Pratique guidée"
+    if (phase === "pratique_autonome") return "Pratique autonome"
+    return "Modelage"
   }
 
   return (
-    <div className="p-4 max-w-md mx-auto">
+    <div className="min-h-screen bg-white px-3 py-3">
+      <div className="mx-auto w-full max-w-[430px]">
+        <h1 className="text-2xl font-bold mb-2">Groupe {groupeId}</h1>
 
-      <h1 className="text-xl font-bold mb-3">Groupe {groupeId}</h1>
-
-      {/* CONTROLES */}
-      <div className="flex gap-2 mb-3 flex-wrap">
-        <button
-          onClick={retourArriere}
-          className="bg-black text-white px-3 py-2 rounded"
-        >
-          RETOUR
-        </button>
-
-        <button
-          onClick={() => setMultiMode(!multiMode)}
-          className="bg-purple-600 text-white px-3 py-2 rounded"
-        >
-          MULTI
-        </button>
-      </div>
-
-      {/* ACTIONS */}
-      {selectedEleve && !multiMode && (
-        <div className="flex gap-2 mb-3 flex-wrap">
-          <button onClick={() => setStatut(selectedEleve, 0)}>🟢</button>
-          <button onClick={() => setStatut(selectedEleve, 1)}>⚪</button>
-          <button onClick={() => setStatut(selectedEleve, 2)}>🟠</button>
-          <button onClick={() => setStatut(selectedEleve, 3)}>🔴</button>
-        </div>
-      )}
-
-      {multiMode && multiSelection.length > 0 && (
-        <div className="flex gap-2 mb-3">
-          <button onClick={() => setStatutMultiple(0)}>🟢</button>
-          <button onClick={() => setStatutMultiple(1)}>⚪</button>
-          <button onClick={() => setStatutMultiple(2)}>🟠</button>
-          <button onClick={() => setStatutMultiple(3)}>🔴</button>
-        </div>
-      )}
-
-      {/* LISTE */}
-      <div className="grid grid-cols-3 gap-2">
-        {eleves.map((e) => (
+        <div className="flex flex-wrap gap-2 mb-2">
           <button
-            key={e.id}
-            onClick={() =>
-              multiMode ? toggleMulti(e.id) : setSelection(e.id)
-            }
-            className={`${couleur(e.niveau)} text-white p-3 rounded`}
+            onClick={quitterGroupe}
+            className="bg-red-700 text-white px-3 py-2 rounded-2xl text-sm"
           >
-            {e.nom}
+            QUITTER
           </button>
-        ))}
+
+          <button
+            onClick={retourArriere}
+            disabled={undoStack.length === 0}
+            className={`px-3 py-2 rounded-2xl text-sm ${
+              undoStack.length === 0
+                ? "bg-gray-400 text-white opacity-70"
+                : "bg-black text-white"
+            }`}
+          >
+            RETOUR
+          </button>
+
+          <button
+            onClick={() => {
+              const next = !multiMode
+              setMultiMode(next)
+              setMultiSelection([])
+              setMultiReadyForRule(false)
+              setSelection(null)
+              setRetraitDirect(false)
+            }}
+            className={`px-3 py-2 rounded-2xl text-sm ${
+              multiMode ? "bg-purple-700 text-white" : "bg-gray-300 text-black"
+            }`}
+          >
+            MULTIPLE
+          </button>
+
+          <button
+            onClick={() => {
+              setRetraitDirect(!retraitDirect)
+              setSelection(null)
+              setMultiReadyForRule(false)
+            }}
+            className={`px-3 py-2 rounded-2xl text-sm ${
+              retraitDirect ? "bg-red-800 text-white" : "bg-gray-300 text-black"
+            }`}
+          >
+            RETRAIT DIRECT
+          </button>
+
+          {selectedEleve && toiletteActiveSelection && (
+            <button
+              onClick={() => retourDesToilettes(selectedEleve)}
+              className="bg-emerald-600 text-white px-3 py-2 rounded-2xl text-sm"
+            >
+              REVENU 🚽
+            </button>
+          )}
+        </div>
+
+        {showActionBar && (
+          <div className="flex items-center flex-wrap gap-2 mb-2 rounded-2xl bg-gray-100 px-3 py-2">
+            <div className="text-sm font-medium w-full">
+              {selectedEleve?.nom}
+            </div>
+
+            {[1, 2, 3, 4].map((r) => (
+              <button
+                key={r}
+                className="bg-black text-white px-3 py-1.5 rounded-xl text-sm"
+                onClick={() => {
+                  if (selectedEleve) appliquerRegle(selectedEleve, r)
+                }}
+              >
+                #{r}
+              </button>
+            ))}
+
+            <button
+              className="bg-sky-600 text-white px-3 py-1.5 rounded-xl text-lg"
+              onClick={() => {
+                if (selectedEleve) envoyerAuxToilettes(selectedEleve)
+              }}
+              title="Envoyer aux toilettes"
+            >
+              🚽
+            </button>
+          </div>
+        )}
+
+        {multiMode && !multiReadyForRule && (
+          <div className="flex items-center flex-wrap gap-2 mb-2">
+            <button
+              onClick={() => {
+                if (multiSelection.length === 0) return
+                setMultiReadyForRule(true)
+                setSelection(null)
+              }}
+              disabled={multiSelection.length === 0}
+              className={`px-3 py-2 rounded-2xl text-sm ${
+                multiSelection.length === 0
+                  ? "bg-green-300 text-white opacity-70"
+                  : "bg-green-700 text-white"
+              }`}
+            >
+              OK ({multiSelection.length})
+            </button>
+
+            <button
+              onClick={annulerMulti}
+              className="bg-gray-500 text-white px-3 py-2 rounded-2xl text-sm"
+            >
+              ANNULER
+            </button>
+          </div>
+        )}
+
+        {multiMode && multiReadyForRule && (
+          <div className="flex items-center flex-wrap gap-2 mb-2 rounded-2xl bg-gray-100 px-3 py-2">
+            <div className="text-sm font-medium w-full">
+              {multiSelection.length} élève{multiSelection.length > 1 ? "s" : ""}
+            </div>
+
+            {[1, 2, 3, 4].map((r) => (
+              <button
+                key={r}
+                className="bg-black text-white px-3 py-1.5 rounded-xl text-sm"
+                onClick={() => appliquerRegleMultiple(r)}
+              >
+                #{r}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div
+          ref={boardRef}
+          className="relative w-full rounded-[28px] border-2 border-gray-700 bg-gray-100 overflow-hidden"
+          style={{
+            aspectRatio: "7 / 5.6",
+            touchAction: "none",
+          }}
+          onClick={() => {
+            setSelection(null)
+            if (draggingId === null) {
+              setEditMode(false)
+            }
+          }}
+          onMouseMove={(e) => moveDrag(e.clientX, e.clientY)}
+          onMouseUp={endDrag}
+          onMouseLeave={endDrag}
+          onTouchMove={(e) => {
+            const touch = e.touches[0]
+            if (touch) moveDrag(touch.clientX, touch.clientY)
+          }}
+          onTouchEnd={endDrag}
+        >
+          <div
+            className="absolute left-0 top-0 w-full"
+            style={{ height: `${studentAreaPercent}%` }}
+          >
+            <div className="grid h-full w-full grid-cols-7 grid-rows-5">
+              {Array.from({ length: GRID_COLS * GRID_ROWS }).map((_, i) => (
+                <div key={i} className="border border-gray-300" />
+              ))}
+            </div>
+          </div>
+
+          <div
+            className="absolute left-0 bottom-0 w-full flex items-center justify-center"
+            style={{ height: `${TEACHER_ZONE_RATIO * 100}%` }}
+          >
+            <div className="bg-slate-800 text-white text-xs px-4 py-2 rounded-2xl shadow">
+              Bureau du prof
+            </div>
+          </div>
+
+          {eleves.map((e) => {
+            const col = normaliserColonne(e.position_x)
+            const row = normaliserRangee(e.position_y)
+
+            const centerXPercent = ((col + 0.5) / GRID_COLS) * 100
+            const centerYPercent = ((row + 0.5) / GRID_ROWS) * studentAreaPercent
+
+            const isSelected = selection === e.id
+            const isMultiSelected = multiSelection.includes(e.id)
+
+            return (
+              <div
+                key={e.id}
+                className="absolute"
+                style={{
+                  left: `${centerXPercent}%`,
+                  top: `${centerYPercent}%`,
+                  transform: "translate(-50%, -50%)",
+                }}
+                onMouseDown={(ev) => {
+                  ev.stopPropagation()
+
+                  if (editMode) {
+                    startDrag(ev.clientX, ev.clientY, e.id)
+                  } else {
+                    startLongPress()
+                  }
+                }}
+                onMouseUp={cancelLongPress}
+                onTouchStart={(ev) => {
+                  ev.stopPropagation()
+
+                  const touch = ev.touches[0]
+                  if (!touch) return
+
+                  if (editMode) {
+                    startDrag(touch.clientX, touch.clientY, e.id)
+                  } else {
+                    startLongPress()
+                  }
+                }}
+                onTouchEnd={cancelLongPress}
+              >
+                <button
+                  className={[
+                    "rounded-2xl shadow-md font-medium leading-none text-center transition-all",
+                    couleur(e.niveau),
+                    editMode ? "ring-2 ring-black" : "",
+                    isSelected ? "ring-4 ring-black" : "",
+                    isMultiSelected ? "ring-4 ring-purple-600" : "",
+                  ].join(" ")}
+                  style={{
+                    width: `${bubbleWidth}px`,
+                    minHeight: `${bubbleHeight}px`,
+                    fontSize: `${bubbleFontSize}px`,
+                    padding: "3px 4px",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                  onClick={(ev) => {
+                    ev.stopPropagation()
+
+                    if (editMode) return
+
+                    if (multiMode) {
+                      toggleMultiSelection(e.id)
+                      return
+                    }
+
+                    setSelection(e.id)
+                  }}
+                >
+                  {e.nom}
+                </button>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="mt-3 rounded-2xl border border-gray-200 bg-white p-3">
+          <div className="text-xs font-semibold text-gray-500 mb-2">
+            Section du cours
+          </div>
+
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              { value: "modelage", label: "Modelage" },
+              { value: "pratique_guidee", label: "Pratique guidée" },
+              { value: "pratique_autonome", label: "Pratique autonome" },
+            ].map((item) => (
+              <button
+                key={item.value}
+                onClick={() => choisirPhase(item.value as PhaseCours)}
+                className={`rounded-xl px-2 py-2 text-xs font-semibold ${
+                  phaseCours === item.value
+                    ? "bg-indigo-700 text-white"
+                    : "bg-gray-200 text-black"
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-2 text-xs text-gray-500">
+            En cours : {phaseLabel(phaseCours)}
+          </div>
+        </div>
+
+        {toilettesActives.length > 0 && (
+          <div className="mt-2 text-xs text-gray-600">
+            Toilettes en cours :{" "}
+            {toilettesActives
+              .map((t) => `${t.eleve_nom} (🚽${t.slot})`)
+              .join(" • ")}
+          </div>
+        )}
+
+        {editMode && (
+          <div className="mt-2 text-xs text-gray-600">
+            Mode placement activé : glisse les élèves. Touche à l’extérieur pour quitter.
+          </div>
+        )}
       </div>
     </div>
   )
