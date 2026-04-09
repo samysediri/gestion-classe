@@ -342,7 +342,9 @@ export default function Page() {
         })
         .eq("groupe_id", config.groupe_actif)
 
-      await viderToilettesDuGroupe(config.groupe_actif)
+      if (config.groupe_actif !== null) {
+  await viderToilettesDuGroupe(config.groupe_actif)
+}
 
       await supabase
         .from("sessions_cours")
