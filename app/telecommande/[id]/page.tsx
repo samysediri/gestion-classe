@@ -611,13 +611,7 @@ export default function Page() {
         prev.map((el) => (el.id === e.id ? { ...el, ...update } : el))
       )
 
-      await loggerAction({
-        eleve_id: e.id,
-        eleve_nom: e.nom,
-        action_type: "retenue_retiree",
-        niveau_avant: 2,
-        niveau_apres: 1,
-      })
+      
 
       return
     }
@@ -643,13 +637,7 @@ export default function Page() {
         prev.map((el) => (el.id === e.id ? { ...el, ...update } : el))
       )
 
-      await loggerAction({
-        eleve_id: e.id,
-        eleve_nom: e.nom,
-        action_type: "manquement_retire",
-        niveau_avant: 1,
-        niveau_apres: 0,
-      })
+      
     }
   }
 
