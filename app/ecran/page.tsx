@@ -403,19 +403,16 @@ const negatifs = useMemo(
     if (regleKey === "regle_retrait") return ""
 
     if (regleKey === "regle_retenue" && (e.regle_retenue ?? 0) > 0) {
-      return ` +${progress} 👍`
-    }
+  return " 👍"
+}
 
-    if (
-      regleKey === "regle_manquement" &&
-      (e.regle_manquement ?? 0) > 0 &&
-      (e.regle_retenue ?? 0) === 0
-    ) {
-      return ` +${progress} 👍`
-    }
-
-    return ""
-  }
+if (
+  regleKey === "regle_manquement" &&
+  (e.regle_manquement ?? 0) > 0 &&
+  (e.regle_retenue ?? 0) === 0
+) {
+  return " 👍"
+}
 
   function renderColonneBravo(items: LogRow[]) {
     const textClass = getTextSize(items.length)
@@ -478,8 +475,8 @@ const negatifs = useMemo(
                   overflowWrap: "anywhere",
                 }}
               >
-                {e.nom} #{e[regleKey]}
-                {getSuffixeBravo(e, regleKey)}
+                {e.nom}
+{getSuffixeBravo(e, regleKey)}
               </div>
             ))}
           </div>
