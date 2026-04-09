@@ -28,6 +28,7 @@ type ToiletteRecord = {
 }
 
 type PhaseCours = "modelage" | "pratique_guidee" | "pratique_autonome"
+type EcranMode = "colonnes" | "ratio"
 
 type SessionCoursRow = {
   id: number
@@ -70,6 +71,7 @@ type ConfigRow = {
   phase_cours: PhaseCours | null
   bravos_par_palier: number
   bravo_display_seconds: number
+  ecran_mode: EcranMode | null
 }
 
 export default function Ecran() {
@@ -77,9 +79,11 @@ export default function Ecran() {
   const [toilettesActives, setToilettesActives] = useState<ToiletteRecord[]>([])
   const [toilettesDernieres, setToilettesDernieres] = useState<ToiletteRecord[]>([])
   const [phaseCours, setPhaseCours] = useState<PhaseCours>("modelage")
+  const [ecranMode, setEcranMode] = useState<EcranMode>("colonnes")
   const [nowMs, setNowMs] = useState(Date.now())
 
   const [bravosRecents, setBravosRecents] = useState<LogRow[]>([])
+  const [logsSession, setLogsSession] = useState<LogRow[]>([])
   const [dernierResumeSession, setDernierResumeSession] = useState<SessionCoursRow | null>(null)
   const [dernierResumeBravoCount, setDernierResumeBravoCount] = useState(0)
   const [bravoDisplaySeconds, setBravoDisplaySeconds] = useState(30)
@@ -103,6 +107,7 @@ export default function Ecran() {
       setToilettesActives([])
       setToilettesDernieres([])
       setBravosRecents([])
+      setLogsSession([])
       setDernierResumeSession(null)
       setDernierResumeBravoCount(0)
       return
@@ -110,6 +115,7 @@ export default function Ecran() {
 
     const cfg = config as ConfigRow
     setBravoDisplaySeconds(cfg.bravo_display_seconds ?? 30)
+    setEcranMode(cfg.ecran_mode ?? "colonnes")
 
     if (!cfg || !cfg.groupe_actif) {
       setEleves([])
@@ -117,6 +123,7 @@ export default function Ecran() {
       setToilettesDernieres([])
       setPhaseCours("modelage")
       setBravosRecents([])
+      setLogsSession([])
 
       const { data: lastSession, error: lastSessionError } = await supabase
         .from("sessions_cours")
@@ -178,6 +185,7 @@ export default function Ecran() {
       { data: toilettesActivesData, error: toilettesActivesError },
       { data: toilettesHistData, error: toilettesHistError },
       { data: bravoLogsData, error: bravoLogsError },
+      { data: logsData, error: logsError },
     ] = await Promise.all([
       supabase
         .from("eleves")
@@ -209,16 +217,27 @@ export default function Ecran() {
             .order("created_at", { ascending: false })
             .limit(300)
         : Promise.resolve({ data: [], error: null }),
+
+      activeSession?.id
+        ? supabase
+            .from("ecarts_conduite_log")
+            .select("*")
+            .eq("session_id", activeSession.id)
+            .order("created_at", { ascending: false })
+            .limit(5000)
+        : Promise.resolve({ data: [], error: null }),
     ])
 
     if (elevesError) {
       console.error("ERREUR CHARGEMENT ÉLÈVES:", elevesError)
       setEleves([])
     } else {
-      setEleves(((elevesData ?? []) as Eleve[]).map((e) => ({
-        ...e,
-        bravo_progress: e.bravo_progress ?? 0,
-      })))
+      setEleves(
+        ((elevesData ?? []) as Eleve[]).map((e) => ({
+          ...e,
+          bravo_progress: e.bravo_progress ?? 0,
+        }))
+      )
     }
 
     if (toilettesActivesError) {
@@ -240,6 +259,13 @@ export default function Ecran() {
       setBravosRecents([])
     } else {
       setBravosRecents((bravoLogsData ?? []) as LogRow[])
+    }
+
+    if (logsError) {
+      console.error("ERREUR LOGS SESSION:", logsError)
+      setLogsSession([])
+    } else {
+      setLogsSession((logsData ?? []) as LogRow[])
     }
   }
 
@@ -296,6 +322,29 @@ export default function Ecran() {
     [eleves]
   )
 
+  const positifs = useMemo(
+    () => logsSession.filter((l) => l.action_type === "bravo").length,
+    [logsSession]
+  )
+
+  const negatifs = useMemo(
+    () =>
+      logsSession.filter((l) =>
+        [
+          "manquement",
+          "retenue",
+          "retrait",
+          "retrait_direct",
+          "manquement_retire",
+          "retenue_retiree",
+        ].includes(l.action_type)
+      ).length,
+    [logsSession]
+  )
+
+  const totalRatio = positifs + negatifs
+  const ratioPositif = totalRatio === 0 ? 0 : Math.round((positifs / totalRatio) * 100)
+
   function getTextSize(count: number) {
     if (count <= 2) return "text-[clamp(2.3rem,4.6vw,4.8rem)]"
     if (count <= 4) return "text-[clamp(1.8rem,3.7vw,3.9rem)]"
@@ -351,12 +400,19 @@ export default function Ecran() {
     })
   }, [toilettesActives, toilettesDernieres])
 
-  function getSuffixeBravo(e: Eleve, regleKey: "regle_manquement" | "regle_retenue" | "regle_retrait") {
+  function getSuffixeBravo(
+    e: Eleve,
+    regleKey: "regle_manquement" | "regle_retenue" | "regle_retrait"
+  ) {
     const progress = e.bravo_progress ?? 0
     if (progress <= 0) return ""
 
     if (regleKey === "regle_retrait") return ""
-    if (regleKey === "regle_retenue" && (e.regle_retenue ?? 0) > 0) return ` +${progress} 👍`
+
+    if (regleKey === "regle_retenue" && (e.regle_retenue ?? 0) > 0) {
+      return ` +${progress} 👍`
+    }
+
     if (
       regleKey === "regle_manquement" &&
       (e.regle_manquement ?? 0) > 0 &&
@@ -429,7 +485,8 @@ export default function Ecran() {
                   overflowWrap: "anywhere",
                 }}
               >
-                {e.nom} #{e[regleKey]}{getSuffixeBravo(e, regleKey)}
+                {e.nom} #{e[regleKey]}
+                {getSuffixeBravo(e, regleKey)}
               </div>
             ))}
           </div>
@@ -515,6 +572,56 @@ export default function Ecran() {
 
             <div className="mt-2 text-[clamp(1rem,1.5vw,1.3rem)] text-gray-600">
               Séance terminée
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (ecranMode === "ratio") {
+    return (
+      <div className="w-screen h-screen bg-black flex items-center justify-center overflow-hidden">
+        <div
+          className="bg-black text-white flex items-center justify-center"
+          style={{
+            width: "min(100vw, calc(100vh * 16 / 9))",
+            height: "min(100vh, calc(100vw * 9 / 16))",
+          }}
+        >
+          <div className="w-full h-full flex flex-col items-center justify-center px-10">
+            <div className="text-[clamp(2rem,3vw,3rem)] font-semibold text-gray-300 mb-6">
+              Ratio positif / négatif
+            </div>
+
+            <div className="text-[clamp(4.5rem,10vw,9rem)] font-extrabold leading-none">
+              {ratioPositif}%
+            </div>
+
+            <div className="mt-5 text-[clamp(1.4rem,2vw,2rem)] font-semibold text-gray-300">
+              👍 {positifs} / ❌ {negatifs}
+            </div>
+
+            <div className="mt-10 w-[min(70vw,520px)] h-[min(70vw,520px)] rounded-full overflow-hidden shadow-2xl">
+              <div
+                className="w-full h-full rounded-full"
+                style={{
+                  background: `conic-gradient(
+                    #22c55e 0% ${ratioPositif}%,
+                    #ef4444 ${ratioPositif}% 100%
+                  )`,
+                }}
+              />
+            </div>
+
+            {ratioPositif >= 75 && (
+              <div className="mt-8 text-[clamp(2rem,3vw,3rem)] font-extrabold text-green-400 text-center">
+                🎉 Récompense de groupe ! 🎉
+              </div>
+            )}
+
+            <div className="mt-6 text-[clamp(1rem,1.4vw,1.2rem)] text-gray-400 text-center">
+              Retourne sur la télécommande et appuie sur « RETOUR ÉCRAN » pour revenir aux colonnes.
             </div>
           </div>
         </div>
