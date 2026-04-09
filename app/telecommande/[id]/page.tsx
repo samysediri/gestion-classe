@@ -44,6 +44,7 @@ type UndoSnapshot = {
 }
 
 type PhaseCours = "modelage" | "pratique_guidee" | "pratique_autonome"
+type EcranMode = "colonnes" | "ratio"
 
 type ConfigRow = {
   id: number
@@ -52,6 +53,7 @@ type ConfigRow = {
   phase_cours: PhaseCours | null
   bravos_par_palier: number
   bravo_display_seconds: number
+  ecran_mode: EcranMode | null
 }
 
 type ActionType =
@@ -92,6 +94,7 @@ export default function Page() {
 
   const [bravosParPalier, setBravosParPalier] = useState(2)
   const [bravoDisplaySeconds, setBravoDisplaySeconds] = useState(30)
+  const [ecranMode, setEcranMode] = useState<EcranMode>("colonnes")
 
   const [boardSize, setBoardSize] = useState({ width: 320, height: 240 })
 
@@ -165,6 +168,7 @@ export default function Page() {
     setPhaseCours(normalizePhase(config.phase_cours))
     setBravosParPalier(config.bravos_par_palier ?? 2)
     setBravoDisplaySeconds(config.bravo_display_seconds ?? 30)
+    setEcranMode(config.ecran_mode ?? "colonnes")
 
     return config
   }
@@ -209,6 +213,19 @@ export default function Page() {
 
     if (error) {
       console.error("ERREUR SAVE PARAMS BRAVO:", error)
+    }
+  }
+
+  async function changerEcranMode(mode: EcranMode) {
+    setEcranMode(mode)
+
+    const { error } = await supabase
+      .from("config")
+      .update({ ecran_mode: mode })
+      .eq("id", 1)
+
+    if (error) {
+      console.error("ERREUR ECRAN MODE:", error)
     }
   }
 
@@ -343,8 +360,8 @@ export default function Page() {
         .eq("groupe_id", config.groupe_actif)
 
       if (config.groupe_actif !== null) {
-  await viderToilettesDuGroupe(config.groupe_actif)
-}
+        await viderToilettesDuGroupe(config.groupe_actif)
+      }
 
       await supabase
         .from("sessions_cours")
@@ -875,14 +892,6 @@ export default function Page() {
       return
     }
 
-    await loggerAction({
-      eleve_id: e.id,
-      eleve_nom: e.nom,
-      action_type: "toilettes_retour",
-      niveau_avant: e.niveau,
-      niveau_apres: e.niveau,
-    })
-
     await chargerToilettesActives()
     setSelection(e.id)
   }
@@ -903,12 +912,13 @@ export default function Page() {
       .eq("groupe_id", groupeId)
 
     await supabase
-      .from("config")
-      .update({
-        groupe_actif: null,
-        en_cours: false,
-        phase_cours: "modelage",
-      })
+  .from("config")
+  .update({
+    groupe_actif: null,
+    en_cours: false,
+    phase_cours: "modelage",
+    ecran_mode: "colonnes",
+  })
       .eq("id", 1)
 
     await fermerSession()
@@ -934,6 +944,7 @@ export default function Page() {
     setUndoStack([])
     setToilettesActives([])
     setPhaseCours("modelage")
+    setEcranMode("colonnes")
   }
 
   function couleur(niveau: number) {
@@ -1071,63 +1082,83 @@ export default function Page() {
         <h1 className="text-2xl font-bold mb-2">Groupe {groupeId}</h1>
 
         <div className="flex flex-wrap gap-2 mb-2">
-          <button
-            onClick={quitterGroupe}
-            className={`bg-red-700 text-white ${baseBtn}`}
-          >
-            QUITTER
-          </button>
+  <button
+    onClick={quitterGroupe}
+    className={`bg-red-700 text-white ${baseBtn}`}
+  >
+    QUITTER
+  </button>
 
-          <button
-            onClick={retourArriere}
-            disabled={undoStack.length === 0}
-            className={`${baseBtn} ${
-              undoStack.length === 0
-                ? "bg-gray-400 text-white opacity-70"
-                : "bg-black text-white"
-            }`}
-          >
-            RETOUR
-          </button>
+  <button
+    onClick={retourArriere}
+    disabled={undoStack.length === 0}
+    className={`${baseBtn} ${
+      undoStack.length === 0
+        ? "bg-gray-400 text-white opacity-70"
+        : "bg-black text-white"
+    }`}
+  >
+    RETOUR
+  </button>
 
-          <button
-            onClick={() => {
-              const next = !multiMode
-              setMultiMode(next)
-              setMultiSelection([])
-              setMultiReadyForRule(false)
-              setSelection(null)
-              setRetraitDirect(false)
-            }}
-            className={`${baseBtn} ${
-              multiMode ? "bg-purple-700 text-white" : "bg-gray-300 text-black"
-            }`}
-          >
-            MULTIPLE
-          </button>
+  <button
+    onClick={() => {
+      const next = !multiMode
+      setMultiMode(next)
+      setMultiSelection([])
+      setMultiReadyForRule(false)
+      setSelection(null)
+      setRetraitDirect(false)
+    }}
+    className={`${baseBtn} ${
+      multiMode ? "bg-purple-700 text-white" : "bg-gray-300 text-black"
+    }`}
+  >
+    MULTIPLE
+  </button>
 
-          <button
-            onClick={() => {
-              setRetraitDirect(!retraitDirect)
-              setSelection(null)
-              setMultiReadyForRule(false)
-            }}
-            className={`${baseBtn} ${
-              retraitDirect ? "bg-red-800 text-white" : "bg-gray-300 text-black"
-            }`}
-          >
-            RETRAIT DIRECT
-          </button>
+  <button
+    onClick={() => {
+      setRetraitDirect(!retraitDirect)
+      setSelection(null)
+      setMultiReadyForRule(false)
+    }}
+    className={`${baseBtn} ${
+      retraitDirect ? "bg-red-800 text-white" : "bg-gray-300 text-black"
+    }`}
+  >
+    RETRAIT DIRECT
+  </button>
 
-          {selectedEleve && toiletteActiveSelection && (
-            <button
-              onClick={() => retourDesToilettes(selectedEleve)}
-              className={`bg-emerald-600 text-white ${baseBtn}`}
-            >
-              REVENU 🚽
-            </button>
-          )}
-        </div>
+  <button
+    onClick={() => changerEcranMode("ratio")}
+    className={`${baseBtn} ${
+      ecranMode === "ratio"
+        ? "bg-indigo-700 text-white"
+        : "bg-gray-300 text-black"
+    }`}
+  >
+    RATIO 📊
+  </button>
+
+  {ecranMode === "ratio" && (
+    <button
+      onClick={() => changerEcranMode("colonnes")}
+      className={`bg-indigo-500 text-white ${baseBtn}`}
+    >
+      RETOUR ÉCRAN
+    </button>
+  )}
+
+  {selectedEleve && toiletteActiveSelection && (
+    <button
+      onClick={() => retourDesToilettes(selectedEleve)}
+      className={`bg-emerald-600 text-white ${baseBtn}`}
+    >
+      REVENU 🚽
+    </button>
+  )}
+</div>
 
         <div className="mt-3 mb-3 rounded-2xl border border-gray-200 bg-white p-3">
           <div className="text-xs font-semibold text-gray-500 mb-2">
