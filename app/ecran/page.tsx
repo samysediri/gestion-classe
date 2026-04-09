@@ -414,6 +414,10 @@ if (
   return " 👍"
 }
 
+return ""
+}
+
+
   function renderColonneBravo(items: LogRow[]) {
     const textClass = getTextSize(items.length)
     const spacingClass = getSpacingClass(items.length)
