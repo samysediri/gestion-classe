@@ -330,7 +330,7 @@ export default function Ecran() {
 const negatifs = useMemo(
   () =>
     logsSession.filter((l) =>
-      ["retenue", "retrait", "retrait_direct"].includes(l.action_type)
+      ["manquement", "retenue", "retrait", "retrait_direct"].includes(l.action_type)
     ).length,
   [logsSession]
 )
