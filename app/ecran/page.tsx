@@ -323,24 +323,17 @@ export default function Ecran() {
   )
 
   const positifs = useMemo(
-    () => logsSession.filter((l) => l.action_type === "bravo").length,
-    [logsSession]
-  )
+  () => logsSession.filter((l) => l.action_type === "bravo").length,
+  [logsSession]
+)
 
-  const negatifs = useMemo(
-    () =>
-      logsSession.filter((l) =>
-        [
-          "manquement",
-          "retenue",
-          "retrait",
-          "retrait_direct",
-          "manquement_retire",
-          "retenue_retiree",
-        ].includes(l.action_type)
-      ).length,
-    [logsSession]
-  )
+const negatifs = useMemo(
+  () =>
+    logsSession.filter((l) =>
+      ["manquement", "retenue", "retrait", "retrait_direct"].includes(l.action_type)
+    ).length,
+  [logsSession]
+)
 
   const totalRatio = positifs + negatifs
   const ratioPositif = totalRatio === 0 ? 0 : Math.round((positifs / totalRatio) * 100)
