@@ -1,10 +1,8 @@
 import { createClient } from "@supabase/supabase-js"
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co"
-const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || "placeholder-key"
+const supabaseUrl = "https://wtpljoegmjhinqeilupt.supabase.co"
+const supabaseKey = "sb_publishable_2sJvk96T91kVBSBXkfqXqg_iiJforY5"
 
-// Do not throw during Next.js prerendering. The real public credentials are
-// injected by Vercel in Preview/Production and used by the browser bundle.
 const client = createClient(supabaseUrl, supabaseKey, {
   auth: {
     persistSession: true,
