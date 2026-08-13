@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useState } from "react"
 import type { Session } from "@supabase/supabase-js"
 import { supabase } from "../lib/supabase"
 
-type Mode = "connexion" | "inscription"
+type Mode = "connexion" | "inscription" | "recuperation"
 
 export default function AuthGate({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
@@ -12,6 +12,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   const [mode, setMode] = useState<Mode>("connexion")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [displayName, setDisplayName] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [message, setMessage] = useState("")
 
@@ -40,6 +41,17 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     setSubmitting(true)
     setMessage("")
 
+    if (mode === "recuperation") {
+      const { error } = await supabase.auth.resetPasswordForEmail(email)
+      setSubmitting(false)
+      setMessage(
+        error
+          ? "Impossible d'envoyer le courriel de récupération pour le moment."
+          : "Un lien de récupération vient d'être envoyé à ton adresse courriel."
+      )
+      return
+    }
+
     if (mode === "connexion") {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
       setSubmitting(false)
@@ -50,7 +62,15 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
       return
     }
 
-    const { data, error } = await supabase.auth.signUp({ email, password })
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          display_name: displayName.trim() || undefined,
+        },
+      },
+    })
     setSubmitting(false)
 
     if (error) {
@@ -80,6 +100,8 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
 
   if (session) return <>{children}</>
 
+  const isRecovery = mode === "recuperation"
+
   return (
     <main className="min-h-screen bg-slate-950 text-white grid place-items-center px-5 py-10">
       <section className="w-full max-w-md rounded-3xl bg-white text-slate-950 p-7 shadow-2xl">
@@ -93,30 +115,53 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
           </div>
         </div>
 
-        <div className="mb-6 grid grid-cols-2 rounded-xl bg-slate-100 p-1 text-sm font-semibold">
-          <button
-            type="button"
-            className={`rounded-lg px-3 py-2 ${mode === "connexion" ? "bg-white shadow-sm" : "text-slate-500"}`}
-            onClick={() => {
-              setMode("connexion")
-              setMessage("")
-            }}
-          >
-            Connexion
-          </button>
-          <button
-            type="button"
-            className={`rounded-lg px-3 py-2 ${mode === "inscription" ? "bg-white shadow-sm" : "text-slate-500"}`}
-            onClick={() => {
-              setMode("inscription")
-              setMessage("")
-            }}
-          >
-            Créer un compte
-          </button>
-        </div>
+        {!isRecovery && (
+          <div className="mb-6 grid grid-cols-2 rounded-xl bg-slate-100 p-1 text-sm font-semibold">
+            <button
+              type="button"
+              className={`rounded-lg px-3 py-2 ${mode === "connexion" ? "bg-white shadow-sm" : "text-slate-500"}`}
+              onClick={() => {
+                setMode("connexion")
+                setMessage("")
+              }}
+            >
+              Connexion
+            </button>
+            <button
+              type="button"
+              className={`rounded-lg px-3 py-2 ${mode === "inscription" ? "bg-white shadow-sm" : "text-slate-500"}`}
+              onClick={() => {
+                setMode("inscription")
+                setMessage("")
+              }}
+            >
+              Créer un compte
+            </button>
+          </div>
+        )}
+
+        {isRecovery && (
+          <div className="mb-6">
+            <h2 className="text-xl font-black">Récupérer mon compte</h2>
+            <p className="mt-1 text-sm text-slate-500">Entre ton courriel Klimato et nous t'enverrons un lien sécurisé.</p>
+          </div>
+        )}
 
         <form onSubmit={submit} className="space-y-4">
+          {mode === "inscription" && (
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-semibold">Nom</span>
+              <input
+                type="text"
+                autoComplete="name"
+                value={displayName}
+                onChange={(event) => setDisplayName(event.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-950"
+                placeholder="Prénom et nom"
+              />
+            </label>
+          )}
+
           <label className="block">
             <span className="mb-1.5 block text-sm font-semibold">Courriel professionnel</span>
             <input
@@ -130,19 +175,21 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
             />
           </label>
 
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-semibold">Mot de passe</span>
-            <input
-              type="password"
-              autoComplete={mode === "connexion" ? "current-password" : "new-password"}
-              required
-              minLength={8}
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-950"
-              placeholder="8 caractères minimum"
-            />
-          </label>
+          {!isRecovery && (
+            <label className="block">
+              <span className="mb-1.5 block text-sm font-semibold">Mot de passe</span>
+              <input
+                type="password"
+                autoComplete={mode === "connexion" ? "current-password" : "new-password"}
+                required
+                minLength={8}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-950"
+                placeholder="8 caractères minimum"
+              />
+            </label>
+          )}
 
           {message && (
             <p className="rounded-xl bg-slate-100 px-4 py-3 text-sm text-slate-700" role="status">
@@ -157,11 +204,39 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
           >
             {submitting
               ? "Un instant…"
-              : mode === "connexion"
-                ? "Se connecter"
-                : "Créer mon espace Klimato"}
+              : isRecovery
+                ? "Envoyer le lien"
+                : mode === "connexion"
+                  ? "Se connecter"
+                  : "Créer mon espace Klimato"}
           </button>
         </form>
+
+        {mode === "connexion" && (
+          <button
+            type="button"
+            onClick={() => {
+              setMode("recuperation")
+              setMessage("")
+            }}
+            className="mt-4 w-full text-sm font-semibold text-slate-500 hover:text-slate-950"
+          >
+            Mot de passe oublié?
+          </button>
+        )}
+
+        {isRecovery && (
+          <button
+            type="button"
+            onClick={() => {
+              setMode("connexion")
+              setMessage("")
+            }}
+            className="mt-4 w-full text-sm font-semibold text-slate-500 hover:text-slate-950"
+          >
+            Retour à la connexion
+          </button>
+        )}
 
         <p className="mt-6 text-xs leading-5 text-slate-500">
           Klimato est destiné au personnel scolaire autorisé. Les données de classe seront isolées par compte enseignant.
