@@ -1,18 +1,325 @@
 "use client"
-import {useEffect,useMemo,useState} from "react"
-import {supabase} from "../../lib/supabase"
-type A="manquement"|"retenue"|"retrait"|"retrait_direct"|"toilettes_depart"|"toilettes_retour"|"bravo"|"manquement_retire"|"retenue_retiree"
-type L={id:number;session_id:number;groupe_id:number;eleve_id:number;eleve_nom:string;action_type:A;regle:number|null;niveau_avant:number|null;niveau_apres:number|null;phase_cours:string|null;created_at:string}
-type S={id:number;groupe_id:number;started_at:string;ended_at:string|null;phase_depart:string|null;phase_fin:string|null;actif:boolean}
-type G={id:number;nom:string|null;numero:string|null}
-type P={id:number;session_id:number;groupe_id:number;eleve_id:number;eleve_nom:string;position_x:number|null;position_y:number|null;niveau_initial:number|null}
-type Suggestion={eleve_id:number;eleve_nom:string;fromX:number;fromY:number;toX:number;toY:number;score:number;reason:string}
-const neg=(a:A)=>["manquement","retenue","retrait","retrait_direct"].includes(a)
-export default function Historique(){const[logs,setLogs]=useState<L[]>([]),[sessions,setSessions]=useState<S[]>([]),[groupRows,setGroupRows]=useState<G[]>([]),[plans,setPlans]=useState<P[]>([]),[loading,setLoading]=useState(true),[groupe,setGroupe]=useState(""),[periode,setPeriode]=useState("30"),[dateDebut,setDateDebut]=useState(""),[dateFin,setDateFin]=useState(""),[selected,setSelected]=useState<number|null>(null),[step,setStep]=useState(0),[showSuggestion,setShowSuggestion]=useState(false)
-async function load(){setLoading(true);const[{data:l},{data:s},{data:g},{data:pl}]=await Promise.all([supabase.from("ecarts_conduite_log").select("*").order("created_at",{ascending:false}).limit(5000),supabase.from("sessions_cours").select("*").order("started_at",{ascending:false}).limit(1000),supabase.from("groupes").select("id,nom,numero").order("id"),supabase.from("session_seating_snapshots").select("*").limit(10000)]);setLogs((l||[])as L[]);setSessions((s||[])as S[]);setGroupRows((g||[])as G[]);setPlans((pl||[])as P[]);setLoading(false)}useEffect(()=>{load()},[])
-const groupName=(id:number)=>{const g=groupRows.find(x=>x.id===id);return g?.numero||g?.nom||`Groupe ${id}`};const cutoff=useMemo(()=>{if(periode==="all"||dateDebut||dateFin)return null;const d=new Date();d.setDate(d.getDate()-Number(periode));return d},[periode,dateDebut,dateFin]);const groupes=useMemo(()=>Array.from(new Set(sessions.map(s=>s.groupe_id))).sort((a,b)=>groupName(a).localeCompare(groupName(b),"fr",{numeric:true})),[sessions,groupRows]);const ss=useMemo(()=>sessions.filter(s=>{const d=new Date(s.started_at);return(!groupe||String(s.groupe_id)===groupe)&&(!cutoff||d>=cutoff)&&(!dateDebut||d>=new Date(`${dateDebut}T00:00:00`))&&(!dateFin||d<=new Date(`${dateFin}T23:59:59.999`))}),[sessions,groupe,cutoff,dateDebut,dateFin]);const ids=new Set(ss.map(s=>s.id));const ll=logs.filter(l=>ids.has(l.session_id));const p=ll.filter(l=>l.action_type==="bravo").length,n=ll.filter(l=>neg(l.action_type)).length,ratio=p+n?Math.round(p/(p+n)*100):null;const active=selected?ss.find(s=>s.id===selected):ss[0];const events=active?logs.filter(l=>l.session_id===active.id).sort((a,b)=>+new Date(a.created_at)-+new Date(b.created_at)):[];const activeP=events.filter(l=>l.action_type==="bravo").length,activeN=events.filter(l=>neg(l.action_type)).length,activeRatio=activeP+activeN?Math.round(activeP/(activeP+activeN)*100):null;const plan=active?plans.filter(x=>x.session_id===active.id):[];useEffect(()=>{setStep(0);setShowSuggestion(false)},[active?.id]);const currentEvent=step>0?events[step-1]:null;const replay=useMemo(()=>plan.map(seat=>{let niveau=seat.niveau_initial??0;let bravos=0;for(const e of events.slice(0,step)){if(e.eleve_id!==seat.eleve_id)continue;if(e.action_type==="bravo")bravos++;if(e.niveau_apres!=null)niveau=e.niveau_apres}return{...seat,niveau,bravos,currentBravo:currentEvent?.action_type==="bravo"&&currentEvent.eleve_id===seat.eleve_id}}),[plan,events,step,currentEvent?.id])
-const analysis=useMemo(()=>{if(!active||!plan.length)return{suggestions:[] as Suggestion[],note:""};const groupSessions=sessions.filter(s=>s.groupe_id===active.groupe_id).map(s=>s.id),groupLogs=logs.filter(l=>groupSessions.includes(l.session_id)),student=new Map<number,{name:string;neg:number;bravo:number}>();for(const seat of plan)student.set(seat.eleve_id,{name:seat.eleve_nom,neg:0,bravo:0});for(const l of groupLogs){const x=student.get(l.eleve_id);if(!x)continue;if(neg(l.action_type))x.neg++;if(l.action_type==="bravo")x.bravo++}const risk=[...student.entries()].map(([id,x])=>({id,...x,score:x.neg*2-x.bravo*.5})).sort((a,b)=>b.score-a.score);const risky=risk.filter(x=>x.score>=2).slice(0,Math.max(2,Math.ceil(plan.length*.2)));if(!risky.length)return{suggestions:[],note:"Pas assez de comportements problématiques répétés pour justifier un changement de plan."};const occupied=plan.map(s=>({x:s.position_x??0,y:s.position_y??4}));const candidates=occupied.slice().sort((a,b)=>(b.y-a.y)||Math.abs(a.x-3)-Math.abs(b.x-3));const used=new Set<string>();const suggestions:Suggestion[]=[];for(const r of risky){const seat=plan.find(s=>s.eleve_id===r.id);if(!seat)continue;let best=candidates.find(c=>!used.has(`${c.x},${c.y}`)&&!(c.x===(seat.position_x??0)&&c.y===(seat.position_y??4)));if(!best)continue;used.add(`${best.x},${best.y}`);suggestions.push({eleve_id:r.id,eleve_nom:r.name,fromX:seat.position_x??0,fromY:seat.position_y??4,toX:best.x,toY:best.y,score:r.score,reason:`${r.neg} intervention${r.neg===1?"":"s"} négative${r.neg===1?"":"s"} et ${r.bravo} bravo${r.bravo===1?"":"s"} dans l’historique du groupe. Proposition exploratoire: modifier son voisinage et sa position dans la classe.`})}return{suggestions,note:`Analyse basée sur ${groupSessions.length} séance${groupSessions.length===1?"":"s"} et ${groupLogs.length} événement${groupLogs.length===1?"":"s"}. Ce n’est pas une conclusion causale: Klimato propose un essai à valider par l’enseignant.`}},[active?.id,plan,logs,sessions])
-const suggestedPlan=useMemo(()=>plan.map(s=>{const m=analysis.suggestions.find(x=>x.eleve_id===s.eleve_id);return m?{...s,position_x:m.toX,position_y:m.toY}:s}),[plan,analysis.suggestions])
-const time=(v:string)=>new Date(v).toLocaleTimeString("fr-CA",{hour:"2-digit",minute:"2-digit"});const date=(v:string)=>new Date(v).toLocaleDateString("fr-CA",{weekday:"short",day:"numeric",month:"short"});const durMin=(s:S)=>!s.ended_at?null:Math.max(1,Math.round((+new Date(s.ended_at)-+new Date(s.started_at))/60000));const dur=(s:S)=>!s.ended_at?"En cours":`${durMin(s)} min`;const phase=(v:string|null)=>v==="pratique_guidee"?"Pratique guidée":v==="pratique_autonome"?"Pratique autonome":v==="modelage"?"Modelage":"—";const label=(a:A)=>({bravo:"Bravo",manquement:"Manquement",retenue:"Retenue",retrait:"Retrait",retrait_direct:"Retrait direct",toilettes_depart:"Sortie toilettes",toilettes_retour:"Retour toilettes",manquement_retire:"Manquement annulé",retenue_retiree:"Retenue annulée"}as Record<A,string>)[a];const stats=(id:number)=>{const x=logs.filter(l=>l.session_id===id),a=x.filter(l=>l.action_type==="bravo").length,b=x.filter(l=>neg(l.action_type)).length;return{a,b,r:a+b?Math.round(a/(a+b)*100):null}};const levelColor=(v:number)=>v===0?"#3b82f6":v===1?"#facc15":v===2?"#f97316":"#dc2626"
-function csvEscape(v:unknown){const s=v==null?"":String(v);return `"${s.replaceAll('"','""')}"`}function exportCSV(){const rows=ll.slice().sort((a,b)=>+new Date(a.created_at)-+new Date(b.created_at)).map(l=>{const s=sessions.find(x=>x.id===l.session_id),seat=plans.find(x=>x.session_id===l.session_id&&x.eleve_id===l.eleve_id);return[l.session_id,groupName(l.groupe_id),l.groupe_id,l.eleve_id,l.eleve_nom,label(l.action_type),l.action_type,l.regle??"",l.niveau_avant??"",l.niveau_apres??"",phase(l.phase_cours),l.created_at,s?.started_at??"",s?.ended_at??"",s?durMin(s)??"":"",s?phase(s.phase_depart):"",s?phase(s.phase_fin):"",seat?.position_x??"",seat?.position_y??""]});const head=["session_id","groupe","groupe_id_interne","eleve_id","eleve_nom","action","action_code","regle","niveau_avant","niveau_apres","phase_evenement","horodatage_evenement","debut_seance","fin_seance","duree_minutes","phase_depart","phase_fin","position_x_debut","position_y_debut"];const csv="\uFEFF"+[head,...rows].map(r=>r.map(csvEscape).join(",")).join("\n");const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=`klimato-historique-${new Date().toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(url)}
-return <main className="kl-page"><div className="kl-shell"><header className="kl-header"><div><span className="kl-brand">KLIMATO</span><h1>Historique</h1><p>Ce qui s’est passé dans tes cours, séance par séance.</p></div><div className="flex gap-4"><button className="kl-text-button" onClick={exportCSV}>Exporter CSV</button><button className="kl-text-button" onClick={load}>Actualiser</button></div></header><div className="kl-toolbar"><label>Groupe<select value={groupe} onChange={e=>{setGroupe(e.target.value);setSelected(null)}}><option value="">Tous</option>{groupes.map(g=><option key={g} value={g}>{groupName(g)}</option>)}</select></label><label>Période<select value={periode} onChange={e=>{setPeriode(e.target.value);setDateDebut("");setDateFin("");setSelected(null)}}><option value="7">7 jours</option><option value="30">30 jours</option><option value="90">3 mois</option><option value="all">Tout</option></select></label><label>Du<input type="date" value={dateDebut} onChange={e=>{setDateDebut(e.target.value);setSelected(null)}}/></label><label>Au<input type="date" value={dateFin} onChange={e=>{setDateFin(e.target.value);setSelected(null)}}/></label></div><section className="kl-summary"><div className="kl-climate"><span>Climat positif · période</span><strong>{ratio===null?"—":`${ratio}%`}</strong><em>{ratio===null?"Pas encore de données":`${p} bravos · ${n} interventions`}</em></div><div className="kl-climate"><span>Climat · séance sélectionnée</span><strong>{activeRatio===null?"—":`${activeRatio}%`}</strong><em>{active?`${activeP} bravos · ${activeN} interventions`:"Aucune séance"}</em></div><div><span>Séances</span><strong>{ss.length}</strong></div><div><span>Événements</span><strong>{ll.length}</strong></div></section>{loading?<p className="kl-empty">Chargement…</p>:ss.length===0?<p className="kl-empty">Aucune séance pour cette période.</p>:<div className="kl-history-grid"><section className="kl-session-list"><h2>Séances</h2>{ss.map(s=>{const x=stats(s.id);return <button key={s.id} onClick={()=>setSelected(s.id)} className={`kl-session ${active?.id===s.id?"is-active":""}`}><div className="kl-session-top"><strong>{groupName(s.groupe_id)}</strong><span>{date(s.started_at)}</span></div><div className="kl-session-time">{time(s.started_at)}{s.ended_at?`–${time(s.ended_at)}`:""} · {dur(s)}</div><div className="kl-session-stats"><span>{x.r===null?"Aucune intervention":`${x.r}% positif`}</span><span>{x.a} bravo · {x.b} intervention{x.b===1?"":"s"}</span></div></button>})}</section>{active&&<section className="kl-detail"><div className="kl-detail-head"><div><span className="kl-kicker">{date(active.started_at)}</span><h2>{groupName(active.groupe_id)}</h2><p>{time(active.started_at)}{active.ended_at?`–${time(active.ended_at)}`:""} · {dur(active)} · {activeRatio===null?"aucune intervention":`${activeRatio}% positif`}</p></div><div className="kl-phase">{phase(active.phase_depart)} → {phase(active.phase_fin)}</div></div>{plan.length>0?<><section className="kl-replay"><div className="kl-replay-head"><div><strong>Évolution du plan de classe</strong><span>{step===0?"Début du cours":`${time(events[step-1].created_at)} · ${events[step-1].eleve_nom} · ${label(events[step-1].action_type)}`}</span></div><div><button disabled={step===0} onClick={()=>setStep(x=>Math.max(0,x-1))}>←</button><b>{step} / {events.length}</b><button disabled={step===events.length} onClick={()=>setStep(x=>Math.min(events.length,x+1))}>→</button></div></div><div className="kl-seatmap">{Array.from({length:35}).map((_,i)=><div key={i} className="kl-seatcell"/>)}{replay.map(e=><div key={e.eleve_id} className={`kl-seat ${e.currentBravo?"has-current-bravo":""}`} style={{gridColumn:(e.position_x??0)+1,gridRow:(e.position_y??4)+1,background:levelColor(e.niveau),color:e.niveau>=3?"white":"#111"}} title={`Niveau ${e.niveau} · ${e.bravos} bravo${e.bravos===1?"":"s"}`}><span className="kl-seat-name">{e.eleve_nom}</span>{e.bravos>0&&<span className="kl-bravo-count">+{e.bravos}</span>}{e.currentBravo&&<span className="kl-bravo-now">+ Bravo</span>}</div>)}</div><div className="kl-legend"><span><i style={{background:levelColor(0)}}/>OK</span><span><i style={{background:levelColor(1)}}/>Manquement</span><span><i style={{background:levelColor(2)}}/>Retenue</span><span><i style={{background:levelColor(3)}}/>Retrait</span><span className="kl-bravo-legend"><i/>Bravo</span></div></section><section className="kl-suggestion"><div className="kl-suggestion-head"><div><strong>Optimisation du plan</strong><p>Suggestion fondée sur l’historique comportemental de ce groupe.</p></div><button onClick={()=>setShowSuggestion(x=>!x)}>{showSuggestion?"Masquer":"Suggérer un nouveau plan"}</button></div>{showSuggestion&&<div className="kl-suggestion-body"><p className="kl-analysis-note">{analysis.note}</p>{analysis.suggestions.length>0&&<><div className="kl-seatmap kl-suggested-map">{Array.from({length:35}).map((_,i)=><div key={i} className="kl-seatcell"/>)}{suggestedPlan.map(e=>{const moved=analysis.suggestions.some(x=>x.eleve_id===e.eleve_id);return <div key={e.eleve_id} className={`kl-seat ${moved?"is-suggested-move":""}`} style={{gridColumn:(e.position_x??0)+1,gridRow:(e.position_y??4)+1}}>{e.eleve_nom}{moved&&<span className="kl-move-tag">déplacé</span>}</div>})}</div><div className="kl-reasons">{analysis.suggestions.map(s=><div key={s.eleve_id}><strong>{s.eleve_nom}</strong><p>{s.reason}</p></div>)}</div></>}</div>}</section></>:<p className="kl-plan-note">Plan historique non disponible pour cette ancienne séance. Les nouvelles séances seront enregistrées automatiquement.</p>}<div className="kl-timeline"><div className="kl-event is-neutral"><time>{time(active.started_at)}</time><i>·</i><div><strong>Début du cours</strong><small>{phase(active.phase_depart)}</small></div></div>{events.map((l,i)=><div key={l.id} onClick={()=>setStep(i+1)} className={`kl-event ${l.action_type==="bravo"?"is-positive":neg(l.action_type)?"is-negative":"is-neutral"}`}><time>{time(l.created_at)}</time><i>{l.action_type==="bravo"?"+":neg(l.action_type)?"−":"·"}</i><div><strong>{l.eleve_nom}</strong><span>{label(l.action_type)}{l.regle?` · règle ${l.regle}`:""}</span>{l.phase_cours&&<small>{phase(l.phase_cours)}</small>}</div></div>)}{active.ended_at&&<div className="kl-event is-neutral"><time>{time(active.ended_at)}</time><i>·</i><div><strong>Fin du cours</strong><small>{phase(active.phase_fin)}</small></div></div>}</div></section>}</div>}</div></main>}
+
+import { useEffect, useMemo, useState } from "react"
+import { supabase } from "../../lib/supabase"
+import AISeatingSuggestion from "../../components/AISeatingSuggestion"
+
+type ActionType =
+  | "manquement"
+  | "retenue"
+  | "retrait"
+  | "retrait_direct"
+  | "toilettes_depart"
+  | "toilettes_retour"
+  | "bravo"
+  | "manquement_retire"
+  | "retenue_retiree"
+
+type LogRow = {
+  id: number
+  session_id: number
+  groupe_id: number
+  eleve_id: number
+  eleve_nom: string
+  action_type: ActionType
+  regle: number | null
+  niveau_avant: number | null
+  niveau_apres: number | null
+  phase_cours: string | null
+  created_at: string
+}
+
+type SessionRow = {
+  id: number
+  groupe_id: number
+  started_at: string
+  ended_at: string | null
+  phase_depart: string | null
+  phase_fin: string | null
+  actif: boolean
+}
+
+type GroupeRow = { id: number; nom: string | null; numero: string | null }
+type PlanRow = {
+  id: number
+  session_id: number
+  groupe_id: number
+  eleve_id: number
+  eleve_nom: string
+  position_x: number | null
+  position_y: number | null
+  niveau_initial: number | null
+}
+
+const negativeActions = new Set<ActionType>(["manquement", "retenue", "retrait", "retrait_direct"])
+
+export default function HistoriquePage() {
+  const [logs, setLogs] = useState<LogRow[]>([])
+  const [sessions, setSessions] = useState<SessionRow[]>([])
+  const [groupes, setGroupes] = useState<GroupeRow[]>([])
+  const [plans, setPlans] = useState<PlanRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [filtreGroupe, setFiltreGroupe] = useState("")
+  const [periode, setPeriode] = useState("30")
+  const [dateDebut, setDateDebut] = useState("")
+  const [dateFin, setDateFin] = useState("")
+  const [selectedSession, setSelectedSession] = useState<number | null>(null)
+  const [step, setStep] = useState(0)
+
+  async function charger() {
+    setLoading(true)
+    const [{ data: l }, { data: s }, { data: g }, { data: p }] = await Promise.all([
+      supabase.from("ecarts_conduite_log").select("*").order("created_at", { ascending: false }).limit(5000),
+      supabase.from("sessions_cours").select("*").order("started_at", { ascending: false }).limit(1000),
+      supabase.from("groupes").select("id,nom,numero").order("id"),
+      supabase.from("session_seating_snapshots").select("*").limit(10000),
+    ])
+    setLogs((l || []) as LogRow[])
+    setSessions((s || []) as SessionRow[])
+    setGroupes((g || []) as GroupeRow[])
+    setPlans((p || []) as PlanRow[])
+    setLoading(false)
+  }
+
+  useEffect(() => { charger() }, [])
+
+  function groupName(id: number) {
+    const g = groupes.find((x) => x.id === id)
+    return g?.numero || g?.nom || `Groupe ${id}`
+  }
+
+  const cutoff = useMemo(() => {
+    if (periode === "all" || dateDebut || dateFin) return null
+    const d = new Date()
+    d.setDate(d.getDate() - Number(periode))
+    return d
+  }, [periode, dateDebut, dateFin])
+
+  const groupeIds = useMemo(
+    () => Array.from(new Set(sessions.map((s) => s.groupe_id))).sort((a, b) => groupName(a).localeCompare(groupName(b), "fr", { numeric: true })),
+    [sessions, groupes]
+  )
+
+  const sessionsFiltrees = useMemo(() => sessions.filter((s) => {
+    const d = new Date(s.started_at)
+    return (!filtreGroupe || String(s.groupe_id) === filtreGroupe)
+      && (!cutoff || d >= cutoff)
+      && (!dateDebut || d >= new Date(`${dateDebut}T00:00:00`))
+      && (!dateFin || d <= new Date(`${dateFin}T23:59:59.999`))
+  }), [sessions, filtreGroupe, cutoff, dateDebut, dateFin])
+
+  const sessionIds = useMemo(() => new Set(sessionsFiltrees.map((s) => s.id)), [sessionsFiltrees])
+  const logsFiltres = useMemo(() => logs.filter((l) => sessionIds.has(l.session_id)), [logs, sessionIds])
+  const positifs = logsFiltres.filter((l) => l.action_type === "bravo").length
+  const negatifs = logsFiltres.filter((l) => negativeActions.has(l.action_type)).length
+  const ratioPeriode = positifs + negatifs ? Math.round((positifs / (positifs + negatifs)) * 100) : null
+
+  const activeSession = selectedSession
+    ? sessionsFiltrees.find((s) => s.id === selectedSession)
+    : sessionsFiltrees[0]
+
+  const events = activeSession
+    ? logs.filter((l) => l.session_id === activeSession.id).sort((a, b) => +new Date(a.created_at) - +new Date(b.created_at))
+    : []
+
+  const activePositifs = events.filter((l) => l.action_type === "bravo").length
+  const activeNegatifs = events.filter((l) => negativeActions.has(l.action_type)).length
+  const ratioSession = activePositifs + activeNegatifs ? Math.round((activePositifs / (activePositifs + activeNegatifs)) * 100) : null
+  const plan = activeSession ? plans.filter((p) => p.session_id === activeSession.id) : []
+
+  useEffect(() => { setStep(0) }, [activeSession?.id])
+
+  const currentEvent = step > 0 ? events[step - 1] : null
+  const replay = useMemo(() => plan.map((seat) => {
+    let niveau = seat.niveau_initial ?? 0
+    let bravos = 0
+    for (const event of events.slice(0, step)) {
+      if (event.eleve_id !== seat.eleve_id) continue
+      if (event.action_type === "bravo") bravos += 1
+      if (event.niveau_apres != null) niveau = event.niveau_apres
+    }
+    return {
+      ...seat,
+      niveau,
+      bravos,
+      currentBravo: currentEvent?.action_type === "bravo" && currentEvent.eleve_id === seat.eleve_id,
+    }
+  }), [plan, events, step, currentEvent?.id])
+
+  function time(value: string) {
+    return new Date(value).toLocaleTimeString("fr-CA", { hour: "2-digit", minute: "2-digit" })
+  }
+
+  function date(value: string) {
+    return new Date(value).toLocaleDateString("fr-CA", { weekday: "short", day: "numeric", month: "short" })
+  }
+
+  function durationMinutes(s: SessionRow) {
+    if (!s.ended_at) return null
+    return Math.max(1, Math.round((+new Date(s.ended_at) - +new Date(s.started_at)) / 60000))
+  }
+
+  function duration(s: SessionRow) {
+    const minutes = durationMinutes(s)
+    return minutes == null ? "En cours" : `${minutes} min`
+  }
+
+  function phase(value: string | null) {
+    if (value === "pratique_guidee") return "Pratique guidée"
+    if (value === "pratique_autonome") return "Pratique autonome"
+    if (value === "modelage") return "Modelage"
+    return "—"
+  }
+
+  function actionLabel(action: ActionType) {
+    return ({
+      bravo: "Bravo",
+      manquement: "Manquement",
+      retenue: "Retenue",
+      retrait: "Retrait",
+      retrait_direct: "Retrait direct",
+      toilettes_depart: "Sortie toilettes",
+      toilettes_retour: "Retour toilettes",
+      manquement_retire: "Manquement annulé",
+      retenue_retiree: "Retenue annulée",
+    } as Record<ActionType, string>)[action]
+  }
+
+  function sessionStats(id: number) {
+    const rows = logs.filter((l) => l.session_id === id)
+    const p = rows.filter((l) => l.action_type === "bravo").length
+    const n = rows.filter((l) => negativeActions.has(l.action_type)).length
+    return { p, n, ratio: p + n ? Math.round((p / (p + n)) * 100) : null }
+  }
+
+  function levelColor(level: number) {
+    if (level === 0) return "#3b82f6"
+    if (level === 1) return "#facc15"
+    if (level === 2) return "#f97316"
+    return "#dc2626"
+  }
+
+  function csvEscape(value: unknown) {
+    const s = value == null ? "" : String(value)
+    return `"${s.replaceAll('"', '""')}"`
+  }
+
+  function exportCSV() {
+    const rows = logsFiltres
+      .slice()
+      .sort((a, b) => +new Date(a.created_at) - +new Date(b.created_at))
+      .map((log) => {
+        const s = sessions.find((x) => x.id === log.session_id)
+        const seat = plans.find((x) => x.session_id === log.session_id && x.eleve_id === log.eleve_id)
+        return [
+          log.session_id, groupName(log.groupe_id), log.groupe_id, log.eleve_id, log.eleve_nom,
+          actionLabel(log.action_type), log.action_type, log.regle ?? "", log.niveau_avant ?? "", log.niveau_apres ?? "",
+          phase(log.phase_cours), log.created_at, s?.started_at ?? "", s?.ended_at ?? "", s ? durationMinutes(s) ?? "" : "",
+          s ? phase(s.phase_depart) : "", s ? phase(s.phase_fin) : "", seat?.position_x ?? "", seat?.position_y ?? "",
+        ]
+      })
+    const head = [
+      "session_id", "groupe", "groupe_id_interne", "eleve_id", "eleve_nom", "action", "action_code", "regle",
+      "niveau_avant", "niveau_apres", "phase_evenement", "horodatage_evenement", "debut_seance", "fin_seance",
+      "duree_minutes", "phase_depart", "phase_fin", "position_x_debut", "position_y_debut",
+    ]
+    const csv = "\uFEFF" + [head, ...rows].map((r) => r.map(csvEscape).join(",")).join("\n")
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `klimato-historique-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <main className="kl-page">
+      <div className="kl-shell">
+        <header className="kl-header">
+          <div>
+            <span className="kl-brand">KLIMATO</span>
+            <h1>Historique</h1>
+            <p>Ce qui s’est passé dans tes cours, séance par séance.</p>
+          </div>
+          <div className="flex gap-4">
+            <button className="kl-text-button" onClick={exportCSV}>Exporter CSV</button>
+            <button className="kl-text-button" onClick={charger}>Actualiser</button>
+          </div>
+        </header>
+
+        <div className="kl-toolbar">
+          <label>Groupe
+            <select value={filtreGroupe} onChange={(e) => { setFiltreGroupe(e.target.value); setSelectedSession(null) }}>
+              <option value="">Tous</option>
+              {groupeIds.map((id) => <option key={id} value={id}>{groupName(id)}</option>)}
+            </select>
+          </label>
+          <label>Période
+            <select value={periode} onChange={(e) => { setPeriode(e.target.value); setDateDebut(""); setDateFin(""); setSelectedSession(null) }}>
+              <option value="7">7 jours</option><option value="30">30 jours</option><option value="90">3 mois</option><option value="all">Tout</option>
+            </select>
+          </label>
+          <label>Du<input type="date" value={dateDebut} onChange={(e) => { setDateDebut(e.target.value); setSelectedSession(null) }} /></label>
+          <label>Au<input type="date" value={dateFin} onChange={(e) => { setDateFin(e.target.value); setSelectedSession(null) }} /></label>
+        </div>
+
+        <section className="kl-summary">
+          <div className="kl-climate"><span>Climat positif · période</span><strong>{ratioPeriode == null ? "—" : `${ratioPeriode}%`}</strong><em>{positifs} bravos · {negatifs} interventions</em></div>
+          <div className="kl-climate"><span>Climat · séance sélectionnée</span><strong>{ratioSession == null ? "—" : `${ratioSession}%`}</strong><em>{activeSession ? `${activePositifs} bravos · ${activeNegatifs} interventions` : "Aucune séance"}</em></div>
+          <div><span>Séances</span><strong>{sessionsFiltrees.length}</strong></div>
+          <div><span>Événements</span><strong>{logsFiltres.length}</strong></div>
+        </section>
+
+        {loading ? <p className="kl-empty">Chargement…</p> : sessionsFiltrees.length === 0 ? <p className="kl-empty">Aucune séance pour cette période.</p> : (
+          <div className="kl-history-grid">
+            <section className="kl-session-list">
+              <h2>Séances</h2>
+              {sessionsFiltrees.map((s) => {
+                const st = sessionStats(s.id)
+                return <button key={s.id} onClick={() => setSelectedSession(s.id)} className={`kl-session ${activeSession?.id === s.id ? "is-active" : ""}`}>
+                  <div className="kl-session-top"><strong>{groupName(s.groupe_id)}</strong><span>{date(s.started_at)}</span></div>
+                  <div className="kl-session-time">{time(s.started_at)}{s.ended_at ? `–${time(s.ended_at)}` : ""} · {duration(s)}</div>
+                  <div className="kl-session-stats"><span>{st.ratio == null ? "Aucune intervention" : `${st.ratio}% positif`}</span><span>{st.p} bravo · {st.n} intervention{st.n === 1 ? "" : "s"}</span></div>
+                </button>
+              })}
+            </section>
+
+            {activeSession && <section className="kl-detail">
+              <div className="kl-detail-head">
+                <div><span className="kl-kicker">{date(activeSession.started_at)}</span><h2>{groupName(activeSession.groupe_id)}</h2><p>{time(activeSession.started_at)}{activeSession.ended_at ? `–${time(activeSession.ended_at)}` : ""} · {duration(activeSession)} · {ratioSession == null ? "aucune intervention" : `${ratioSession}% positif`}</p></div>
+                <div className="kl-phase">{phase(activeSession.phase_depart)} → {phase(activeSession.phase_fin)}</div>
+              </div>
+
+              {plan.length > 0 ? <>
+                <section className="kl-replay">
+                  <div className="kl-replay-head">
+                    <div><strong>Évolution du plan de classe</strong><span>{step === 0 ? "Début du cours" : `${time(events[step - 1].created_at)} · ${events[step - 1].eleve_nom} · ${actionLabel(events[step - 1].action_type)}`}</span></div>
+                    <div><button disabled={step === 0} onClick={() => setStep((x) => Math.max(0, x - 1))}>←</button><b>{step} / {events.length}</b><button disabled={step === events.length} onClick={() => setStep((x) => Math.min(events.length, x + 1))}>→</button></div>
+                  </div>
+                  <div className="kl-seatmap">
+                    {Array.from({ length: 35 }).map((_, i) => <div key={i} className="kl-seatcell" />)}
+                    {replay.map((e) => <div key={e.eleve_id} className={`kl-seat ${e.currentBravo ? "has-current-bravo" : ""}`} style={{ gridColumn: (e.position_x ?? 0) + 1, gridRow: (e.position_y ?? 4) + 1, background: levelColor(e.niveau), color: e.niveau >= 3 ? "white" : "#111" }}>
+                      <span className="kl-seat-name">{e.eleve_nom}</span>{e.bravos > 0 && <span className="kl-bravo-count">+{e.bravos}</span>}{e.currentBravo && <span className="kl-bravo-now">+ Bravo</span>}
+                    </div>)}
+                  </div>
+                  <div className="kl-legend"><span><i style={{ background: levelColor(0) }} />OK</span><span><i style={{ background: levelColor(1) }} />Manquement</span><span><i style={{ background: levelColor(2) }} />Retenue</span><span><i style={{ background: levelColor(3) }} />Retrait</span><span className="kl-bravo-legend"><i />Bravo</span></div>
+                </section>
+
+                <AISeatingSuggestion groupId={activeSession.groupe_id} sessionId={activeSession.id} />
+              </> : <p className="kl-plan-note">Plan historique non disponible pour cette ancienne séance. Les nouvelles séances sont enregistrées automatiquement.</p>}
+
+              <div className="kl-timeline">
+                <div className="kl-event is-neutral"><time>{time(activeSession.started_at)}</time><i>·</i><div><strong>Début du cours</strong><small>{phase(activeSession.phase_depart)}</small></div></div>
+                {events.map((event, i) => <div key={event.id} onClick={() => setStep(i + 1)} className={`kl-event ${event.action_type === "bravo" ? "is-positive" : negativeActions.has(event.action_type) ? "is-negative" : "is-neutral"}`}>
+                  <time>{time(event.created_at)}</time><i>{event.action_type === "bravo" ? "+" : negativeActions.has(event.action_type) ? "−" : "·"}</i><div><strong>{event.eleve_nom}</strong><span>{actionLabel(event.action_type)}{event.regle ? ` · règle ${event.regle}` : ""}</span>{event.phase_cours && <small>{phase(event.phase_cours)}</small>}</div>
+                </div>)}
+                {activeSession.ended_at && <div className="kl-event is-neutral"><time>{time(activeSession.ended_at)}</time><i>·</i><div><strong>Fin du cours</strong><small>{phase(activeSession.phase_fin)}</small></div></div>}
+              </div>
+            </section>}
+          </div>
+        )}
+      </div>
+    </main>
+  )
+}
