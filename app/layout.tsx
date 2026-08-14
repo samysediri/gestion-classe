@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import AuthGate from "../components/AuthGate"
 import HomeButton from "../components/HomeButton"
+import RemoteFastMulti from "../components/RemoteFastMulti"
 import "./globals.css"
 
 const geistSans = Geist({
@@ -41,6 +42,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <AuthGate>
           <HomeButton />
+          <RemoteFastMulti />
           {children}
         </AuthGate>
       </body>
