@@ -1,185 +1,28 @@
 import { NextResponse } from "next/server"
 
-type Student = {
-  key: string
-  x: number
-  y: number
-  negative: number
-  bravos: number
+type Student={key:string;x:number;y:number;negative:number;bravos:number}
+type Event={session:number;student:string;action:string;phase:string|null;x:number|null;y:number|null;timestamp:string}
+type Layout={session:number;seats:{student:string;x:number;y:number}[]}
+type Body={grid?:{cols:number;rows:number};students?:Student[];events?:Event[];layouts?:Layout[];sessionCount?:number}
+type Seat={student:string;x:number;y:number}
+type Candidate={id:"A"|"B"|"C";strategy:string;score:number;improvement:number;moved:number;seats:Seat[]}
+
+const schema={type:"object",additionalProperties:false,properties:{plans:{type:"array",minItems:3,maxItems:3,items:{type:"object",additionalProperties:false,properties:{id:{type:"string",enum:["A","B","C"]},title:{type:"string"},summary:{type:"string"},confidence:{type:"string",enum:["faible","moderee","elevee"]},tradeoff:{type:"string"},reasons:{type:"array",items:{type:"object",additionalProperties:false,properties:{student:{type:"string"},explanation:{type:"string"}},required:["student","explanation"]}}},required:["id","title","summary","confidence","tradeoff","reasons"]}},signals:{type:"array",items:{type:"object",additionalProperties:false,properties:{title:{type:"string"},explanation:{type:"string"},strength:{type:"string",enum:["faible","moderee","forte"]}},required:["title","explanation","strength"]}},limitations:{type:"array",items:{type:"string"}}},required:["plans","signals","limitations"]} as const
+
+function extractText(r:any){if(typeof r?.output_text==="string")return r.output_text;for(const i of r?.output??[])for(const c of i?.content??[])if(c?.type==="output_text"&&typeof c.text==="string")return c.text;return null}
+const neg=new Set(["manquement","retenue","retrait","retrait_direct"])
+const pairKey=(a:string,b:string)=>a<b?`${a}|${b}`:`${b}|${a}`
+function rng(seed=71631){let s=seed>>>0;return()=>((s=Math.imul(1664525,s)+1013904223>>>0)/4294967296)}
+
+function optimize(students:Student[],events:Event[],layouts:Layout[]):Candidate[]{
+ const base=students.map(s=>({student:s.key,x:s.x,y:s.y}));const evBySession=new Map<number,Event[]>();for(const e of events){if(!evBySession.has(e.session))evBySession.set(e.session,[]);evBySession.get(e.session)!.push(e)}
+ const pairPenalty=new Map<string,number>(),zone=new Map<string,{n:number;b:number}>();
+ for(const e of events){if(e.x!=null&&e.y!=null){const k=`${e.x},${e.y}`,z=zone.get(k)||{n:0,b:0};if(neg.has(e.action))z.n++;if(e.action==="bravo")z.b++;zone.set(k,z)}}
+ for(const l of layouts){const ses=evBySession.get(l.session)||[];const by=new Map<string,{n:number;b:number}>();for(const e of ses){const x=by.get(e.student)||{n:0,b:0};if(neg.has(e.action))x.n++;if(e.action==="bravo")x.b++;by.set(e.student,x)}for(let i=0;i<l.seats.length;i++)for(let j=i+1;j<l.seats.length;j++){const a=l.seats[i],b=l.seats[j],dx=Math.abs(a.x-b.x),dy=Math.abs(a.y-b.y);if(dx<=1&&dy<=1&&dx+dy>0){const sa=by.get(a.student)||{n:0,b:0},sb=by.get(b.student)||{n:0,b:0};const k=pairKey(a.student,b.student);pairPenalty.set(k,(pairPenalty.get(k)||0)+(sa.n+sb.n)*1.6-(sa.b+sb.b)*.25)}}}
+ const stat=new Map(students.map(s=>[s.key,s]));
+ const score=(seats:Seat[],moveWeight:number)=>{let v=0;for(const s of seats){const st=stat.get(s.student)!;const risk=Math.max(0,st.negative*1.4-st.bravos*.25);v+=risk*(4-s.y)*.7;const z=zone.get(`${s.x},${s.y}`);if(z)v+=(z.n-z.b*.2)*.15;if(s.x!==st.x||s.y!==st.y)v+=moveWeight*(1+Math.abs(s.x-st.x)+Math.abs(s.y-st.y)*.5)}for(let i=0;i<seats.length;i++)for(let j=i+1;j<seats.length;j++){const a=seats[i],b=seats[j];if(Math.abs(a.x-b.x)<=1&&Math.abs(a.y-b.y)<=1&&Math.abs(a.x-b.x)+Math.abs(a.y-b.y)>0)v+=(pairPenalty.get(pairKey(a.student,b.student))||0)*.55}return v}
+ const make=(id:"A"|"B"|"C",strategy:string,maxMoved:number,moveWeight:number,iterations:number):Candidate=>{const r=rng(71631+id.charCodeAt(0)*97);const baseScore=score(base,moveWeight);let best=base.map(x=>({...x})),bestScore=baseScore;for(let t=0;t<iterations;t++){const c=base.map(x=>({...x}));const swaps=Math.max(1,Math.floor((maxMoved/2)*(.35+r()*.65)));for(let k=0;k<swaps;k++){const i=Math.floor(r()*c.length),j=Math.floor(r()*c.length);if(i===j)continue;const a={x:c[i].x,y:c[i].y};c[i].x=c[j].x;c[i].y=c[j].y;c[j].x=a.x;c[j].y=a.y}const moved=c.filter(s=>{const st=stat.get(s.student)!;return s.x!==st.x||s.y!==st.y}).length;if(moved>maxMoved)continue;const sc=score(c,moveWeight);if(sc<bestScore){best=c;bestScore=sc}}const moved=best.filter(s=>{const st=stat.get(s.student)!;return s.x!==st.x||s.y!==st.y}).length;return{id,strategy,score:+bestScore.toFixed(2),improvement:+Math.max(0,baseScore-bestScore).toFixed(2),moved,seats:best}}
+ return[make("A","Intervention minimale",4,2.8,900),make("B","Optimisation équilibrée",8,1.35,1400),make("C","Réorganisation exploratoire",Math.min(16,students.length),.55,2200)]
 }
 
-type Event = {
-  session: number
-  student: string
-  action: string
-  phase: string | null
-  x: number | null
-  y: number | null
-  timestamp: string
-}
-
-type Body = {
-  grid?: { cols: number; rows: number }
-  students?: Student[]
-  events?: Event[]
-  sessionCount?: number
-}
-
-const schema = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    confidence: { type: "string", enum: ["faible", "moderee", "elevee"] },
-    summary: { type: "string" },
-    limitations: { type: "array", items: { type: "string" } },
-    moves: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          student: { type: "string" },
-          x: { type: "integer", minimum: 0, maximum: 6 },
-          y: { type: "integer", minimum: 0, maximum: 4 },
-          reason: { type: "string" },
-        },
-        required: ["student", "x", "y", "reason"],
-      },
-    },
-    signals: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          title: { type: "string" },
-          explanation: { type: "string" },
-          strength: { type: "string", enum: ["faible", "moderee", "forte"] },
-        },
-        required: ["title", "explanation", "strength"],
-      },
-    },
-  },
-  required: ["confidence", "summary", "limitations", "moves", "signals"],
-} as const
-
-function extractText(response: any) {
-  if (typeof response?.output_text === "string") return response.output_text
-  for (const item of response?.output ?? []) {
-    for (const content of item?.content ?? []) {
-      if (content?.type === "output_text" && typeof content.text === "string") return content.text
-    }
-  }
-  return null
-}
-
-export async function POST(request: Request) {
-  try {
-    const apiKey = process.env.OPENAI_API_KEY
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: "OPENAI_API_KEY n'est pas configurée sur le serveur." },
-        { status: 503 }
-      )
-    }
-
-    const body = (await request.json()) as Body
-    const students = Array.isArray(body.students) ? body.students.slice(0, 40) : []
-    const events = Array.isArray(body.events) ? body.events.slice(-1200) : []
-    const grid = body.grid ?? { cols: 7, rows: 5 }
-
-    if (students.length < 2) {
-      return NextResponse.json({ error: "Pas assez d'élèves pour analyser le plan." }, { status: 400 })
-    }
-
-    const prompt = {
-      task: "Proposer un plan de classe exploratoire à partir de données comportementales pseudonymisées.",
-      constraints: {
-        language: "français",
-        grid,
-        oneStudentPerSeat: true,
-        useOnlyStudentKeysProvided: true,
-        preserveStudentCount: true,
-        avoidCausalClaims: true,
-        teacherZone: "Le bas de la grille (y=4) est le plus proche de la zone enseignant.",
-      },
-      interpretation: [
-        "negative compte les interventions négatives observées.",
-        "bravos compte les renforcements positifs observés.",
-        "Les événements contiennent la phase de cours et, lorsque disponibles, les positions historiques.",
-        "Cherche des motifs répétés de voisinage, de zone, de phase et d'évolution temporelle.",
-        "Une corrélation n'est pas une causalité. Quand les données sont faibles, conserve le plan ou propose peu de changements.",
-        "Déplace le moins d'élèves possible. Chaque déplacement doit avoir une justification fondée sur les données fournies.",
-        "N'invente aucune information personnelle ou psychologique sur les élèves.",
-      ],
-      sessionCount: body.sessionCount ?? 0,
-      students,
-      events,
-    }
-
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || "gpt-5.1",
-        reasoning: { effort: "medium" },
-        input: [
-          {
-            role: "system",
-            content: [
-              {
-                type: "input_text",
-                text: "Tu es le moteur analytique de Klimato, un outil d'aide à la gestion de classe. Analyse uniquement les données fournies. Sois prudent, explicable, parcimonieux dans les déplacements et explicite sur les limites. Ne fais jamais de diagnostic sur un élève.",
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [{ type: "input_text", text: JSON.stringify(prompt) }],
-          },
-        ],
-        text: {
-          format: {
-            type: "json_schema",
-            name: "klimato_seating_plan",
-            strict: true,
-            schema,
-          },
-        },
-      }),
-    })
-
-    const data = await response.json()
-    if (!response.ok) {
-      console.error("OpenAI seating analysis error", data)
-      return NextResponse.json({ error: "L'analyse IA a échoué." }, { status: 502 })
-    }
-
-    const text = extractText(data)
-    if (!text) return NextResponse.json({ error: "Réponse IA vide." }, { status: 502 })
-
-    const result = JSON.parse(text)
-    const allowed = new Set(students.map((s) => s.key))
-    const occupied = new Set<string>()
-    const cleanMoves = []
-
-    for (const move of result.moves ?? []) {
-      if (!allowed.has(move.student)) continue
-      const x = Number(move.x)
-      const y = Number(move.y)
-      if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || x >= grid.cols || y < 0 || y >= grid.rows) continue
-      const seatKey = `${x},${y}`
-      if (occupied.has(seatKey)) continue
-      occupied.add(seatKey)
-      cleanMoves.push({ ...move, x, y })
-    }
-
-    return NextResponse.json({ ...result, moves: cleanMoves })
-  } catch (error) {
-    console.error("Klimato AI seating route", error)
-    return NextResponse.json({ error: "Erreur serveur pendant l'analyse IA." }, { status: 500 })
-  }
-}
+export async function POST(request:Request){try{const apiKey=process.env.OPENAI_API_KEY;if(!apiKey)return NextResponse.json({error:"OPENAI_API_KEY n'est pas configurée sur le serveur."},{status:503});const body=(await request.json()) as Body;const students=(body.students||[]).slice(0,40),events=(body.events||[]).slice(-2500),layouts=(body.layouts||[]).slice(-120);if(students.length<2)return NextResponse.json({error:"Pas assez d'élèves pour analyser le plan."},{status:400});const candidates=optimize(students,events,layouts);const prompt={task:"Comparer trois plans de classe déjà générés mathématiquement par Klimato. Tu ne peux PAS changer leurs coordonnées. Explique au professeur les compromis et les motifs comportementaux observés.",rules:["Utilise seulement les données fournies.","Aucune affirmation causale ou diagnostic sur un élève.","Explique en français simple, sans coordonnées ni jargon technique dans les résumés.","Le plan A minimise les changements, B cherche un compromis, C explore davantage.","Chaque reason doit viser un student pseudonymisé réellement présent.","Si les données sont faibles, dis-le clairement."],sessionCount:body.sessionCount||0,students,events,candidates:candidates.map(c=>({id:c.id,strategy:c.strategy,optimizerScore:c.score,estimatedImprovement:c.improvement,movedStudents:c.moved,seats:c.seats}))};const response=await fetch("https://api.openai.com/v1/responses",{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${apiKey}`},body:JSON.stringify({model:process.env.OPENAI_MODEL||"gpt-5.1",reasoning:{effort:"medium"},input:[{role:"system",content:[{type:"input_text",text:"Tu es Klimato AI. Le moteur d'optimisation a déjà produit trois plans valides. Ton rôle est de les comparer pédagogiquement et de les expliquer avec prudence et clarté. N'invente jamais un quatrième plan."}]},{role:"user",content:[{type:"input_text",text:JSON.stringify(prompt)}]}],text:{format:{type:"json_schema",name:"klimato_multi_plan",strict:true,schema}}})});const data=await response.json();if(!response.ok){console.error("OpenAI seating analysis error",data);return NextResponse.json({error:"L'analyse IA a échoué."},{status:502})}const text=extractText(data);if(!text)return NextResponse.json({error:"Réponse IA vide."},{status:502});const ai=JSON.parse(text);const aiBy=new Map((ai.plans||[]).map((p:any)=>[p.id,p]));const plans=candidates.map(c=>({...c,analysis:aiBy.get(c.id)||{id:c.id,title:c.strategy,summary:"Plan généré par l'optimiseur Klimato.",confidence:"faible",tradeoff:"Analyse IA indisponible.",reasons:[]}}));return NextResponse.json({plans,signals:ai.signals||[],limitations:ai.limitations||[]})}catch(e){console.error("Klimato AI seating route",e);return NextResponse.json({error:"Erreur serveur pendant l'analyse IA."},{status:500})}}
