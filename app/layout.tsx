@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import AuthGate from "../components/AuthGate"
+import HomeButton from "../components/HomeButton"
 import "./globals.css"
 
 const geistSans = Geist({
@@ -34,15 +35,14 @@ export const viewport: Viewport = {
   themeColor: "#020617",
 }
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode
-}>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="fr">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        <AuthGate>{children}</AuthGate>
+        <AuthGate>
+          <HomeButton />
+          {children}
+        </AuthGate>
       </body>
     </html>
   )
